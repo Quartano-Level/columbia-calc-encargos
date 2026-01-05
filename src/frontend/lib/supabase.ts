@@ -9,12 +9,17 @@ function getSupabaseClient(): SupabaseClient {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  const isBypass = process.env.NEXT_PUBLIC_DEV_AUTH_BYPASS === 'true'
 
-  if (!supabaseUrl || !supabaseAnonKey) {
+  if ((!supabaseUrl || !supabaseAnonKey) && !isBypass) {
     throw new Error('Missing Supabase environment variables')
   }
 
-  supabaseInstance = createClient(supabaseUrl, supabaseAnonKey, {
+  // Use dummy values if bypass is on and vars are missing
+  const url = supabaseUrl || 'http://localhost:54321'
+  const key = supabaseAnonKey || 'dummy-key'
+
+  supabaseInstance = createClient(url, key, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,

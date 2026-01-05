@@ -2,8 +2,8 @@ import { Process, Payment, CalculationInput, CalculationResult, BackendCalculati
 import { mapBackendToCalculationResult } from "./mappers";
 
 
-// URL do backend Express local
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "https://fincalc-api.vercel.app";
+// URL do backend Express local - Remove trailing slash if present to avoid double slashes
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "").replace(/\/$/, "");
 
 export async function fetchCalculations(limit = 100): Promise<any[]> {
 	const response = await fetch(`${API_BASE_URL}/calculations?limit=${limit}`, {
@@ -114,8 +114,12 @@ export async function fetchContractsByProcess(priCod: number): Promise<any[]> {
 	return data?.data || [];
 }
 
-export async function fetchCDI(date?: string): Promise<any[]> {
-	const url = date ? `${API_BASE_URL}/cdi?date=${encodeURIComponent(date)}` : `${API_BASE_URL}/cdi`;
+export async function fetchCDI(startDate?: string, endDate?: string): Promise<any[]> {
+	const params = new URLSearchParams();
+	if (startDate) params.append('startDate', startDate);
+	if (endDate) params.append('endDate', endDate);
+	const queryString = params.toString();
+	const url = queryString ? `${API_BASE_URL}/cdi?${queryString}` : `${API_BASE_URL}/cdi`;
 	const response = await fetch(url, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
@@ -124,6 +128,7 @@ export async function fetchCDI(date?: string): Promise<any[]> {
 	const data = await response.json();
 	// Conexos returns an object like { count, pageNumber, rows: [...] }
 	if (data?.data?.rows) return data.data.rows;
+	if (data?.data) return Array.isArray(data.data) ? data.data : (data.data.rows || []);
 	if (data?.rows) return data.rows;
 	return [];
 }
