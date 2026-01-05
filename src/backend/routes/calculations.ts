@@ -1,14 +1,16 @@
 import { Router } from 'express';
 import { getCalculationById, getCalculationsList } from '../services/supabase.js';
-import { logEvent } from '../utils/index.js';
+import { logEvent, boxLog } from '../utils/index.js';
 
 const router = Router();
 
 // POST /calculate
 import { orchestrateCalculation } from '../services/calculation.js';
+import { conexosService } from '../services/conexos.js';
 
 router.post('/', async (req, res) => {
   try {
+    boxLog('Route: POST /calculations', req.body);
     const result = await orchestrateCalculation(req.body);
     res.json(result);
   } catch (err: any) {
@@ -50,12 +52,37 @@ router.post('/:id/submit', async (req, res) => {
     if (error || !data) {
       return res.status(404).json({ error: 'Cálculo não encontrado', details: error?.message || `Nenhum cálculo com id/processo '${req.params.id}'` });
     }
-    // TODO: Submeter ao Conecta/SAP via Conexos (mock)
-    // await conexosService.submitCalculation(data);
-    // Registrar submissão no Supabase (usar id real do cálculo)
+    // 2. Chamar Conexos para inserir a despesa
+    const row = data as any;
+    const payload = row.payload || {};
+
+    const processId = row.processo_id || payload.processId || payload.processoId;
+    const emissionDate = payload.emissionDate || row.calculated_at || new Date().toISOString();
+
+    // Priorizar totalInterest do payload, senao usar total_encargos da coluna
+    const totalInterest = payload.totalInterest || row.total_encargos || 0;
+
+    // Taxa cambial está no objeto cambio do payload
+    const taxaDolarFiscal = payload.cambio?.taxaDolarFiscal || 1;
+
+    boxLog('Submitting to Conexos', { processId, emissionDate, totalInterest, taxaDolarFiscal });
+
+    await conexosService.submitExpense({
+      processId,
+      emissionDate,
+      totalInterest,
+      taxaDolarFiscal
+    });
+
+    // 3. Registrar submissão no Supabase (usar id real do cálculo)
     logEvent('calculation_submitted', { calculationId: data.id });
+
+    // Opcional: Atualizar status do cálculo para 'submitted'
+    // await updateCalculationStatus(data.id, 'submitted');
+
     res.json({ status: 'submitted', calculationId: data.id });
   } catch (err: any) {
+    boxLog('Submission Error', { error: err.message, data: err.response?.data });
     res.status(500).json({ error: 'Erro ao submeter cálculo', details: err.message });
   }
 });

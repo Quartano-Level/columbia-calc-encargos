@@ -1,5 +1,5 @@
-
 import axios, { AxiosInstance } from 'axios';
+import { boxLog } from '../utils/index.js';
 
 class ConexosService {
   private sid: string | null = null;
@@ -27,6 +27,7 @@ class ConexosService {
   }
 
   async login(sessionToKill?: string): Promise<void> {
+    boxLog('Conexos: login attempt', { sessionToKill });
     const username = process.env.CONEXOS_USERNAME || 'MPS_FRANCINEI';
     const password = process.env.CONEXOS_PASSWORD || 'Abc123456@';
     console.log('[Conexos] Tentando login...', sessionToKill ? `(matando sessão ${sessionToKill.substring(0, 8)}...)` : '');
@@ -217,6 +218,7 @@ class ConexosService {
   }
 
   async getProcesses(filters?: { priCod?: string; priCodIn?: number[]; priEspRefcliente?: string }) {
+    boxLog('Conexos: getProcesses Input', filters);
     await this.ensureSid();
     const filterList: Record<string, any> = { "priVldStatus#IN": ["1"] };
 
@@ -277,6 +279,7 @@ class ConexosService {
   }
 
   async getParcelsByProcessId(processId: string) {
+    boxLog('Conexos: getParcelsByProcessId Input', { processId });
     await this.ensureSid();
     const headers = {
       ...this.getAuthHeaders(),
@@ -420,6 +423,7 @@ class ConexosService {
   }
 
   async getDespesasByProcessId(processId: string) {
+    boxLog('Conexos: getDespesasByProcessId Input', { processId });
     await this.ensureSid();
     const body = {
       fieldList: [],
@@ -453,6 +457,7 @@ class ConexosService {
   }
 
   async getCDI(startDate?: string, endDate?: string) {
+    boxLog('Conexos: getCDI Input', { startDate, endDate });
     await this.ensureSid();
 
     // Construir filterList - filtrar por intervalo se fornecido
@@ -519,6 +524,7 @@ class ConexosService {
   }
 
   async getProcessById(id: string) {
+    boxLog('Conexos: getProcessById Input', { id });
     await this.ensureSid();
     const getHeaders = () => ({
       ...this.getAuthHeaders(),
@@ -1032,6 +1038,78 @@ class ConexosService {
         }
       }
       return [];
+    }
+  }
+
+  async submitExpense(data: {
+    processId: string | number;
+    emissionDate: string;
+    totalInterest: number;
+    taxaDolarFiscal: number;
+  }) {
+    await this.ensureSid();
+
+    // Data formatada para timestamp (meia-noite UTC para evitar problemas de fuso)
+    const dateObj = new Date(data.emissionDate);
+    dateObj.setUTCHours(0, 0, 0, 0);
+    const timestamp = dateObj.getTime();
+
+    // Valor convertido para BRL (se taxaDolarFiscal for fornecida, senao usa valor direto)
+    const valorBRL = data.totalInterest * (data.taxaDolarFiscal || 1);
+
+    const body = {
+      moeCod: 790,
+      gerVldFeatureCliente: 0,
+      priCod: String(data.processId),
+      priVldTipo: 3,
+      frontModelName: "despesasProcesso",
+      prjCod: 1,
+      idtCod: 1,
+      pidVldStatus: 1,
+      impCod: 1081,
+      pidVldFormaReteio: 2,
+      pidDtaTaxas: timestamp,
+      pdiVldOrigemDesp: 1,
+      pidVldTipo: 1,
+      pidVldLibera: 1,
+      pidVldNfserv: 0,
+      pidVldFonte: 1,
+      impDesNome: "ENCARGOS FINANCEIROS",
+      moeEspNome: "REAL/BRASIL",
+      pidFltTxMneg: 1,
+      ctpDesNome: "ENCARGOS FINANCEIROS",
+      ctpCod: 672,
+      prdDesNome: null,
+      prdCod: null,
+      pidMnyValormn: Number(valorBRL.toFixed(2)),
+      pidMnyValorMneg: Number(valorBRL.toFixed(2)),
+      filCod: "2"
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': '2',
+      'cnx-usncod': '97',
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    boxLog('Conexos: submitExpense Payload', body);
+
+    try {
+      const resp = await this.client.post('/imp021/ProcessoDespesas', body, { headers });
+      boxLog('Conexos: submitExpense Response', resp.data);
+      return resp.data;
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post('/imp021/ProcessoDespesas', body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data;
+      }
+      const errorData = err.response?.data;
+      console.error('[Conexos] ERRO ao submeter despesa:', errorData || err.message);
+      throw err;
     }
   }
 }
