@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { Process, Payment, CalculationResult } from "@/lib/types";
 import { fetchProcess, fetchCDI, calculateCharges, submitToConecta, fetchContractsByProcess } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,10 +14,22 @@ import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { ProtectedRoute } from "@/components/protected-route";
 
+// Helper to map currency names to ISO codes for Intl.NumberFormat
+function getCurrencyCode(name: string): string {
+	const upperName = (name || "").toUpperCase();
+	if (upperName.includes("DOLAR") || upperName.includes("USD")) return "USD";
+	if (upperName.includes("EURO") || upperName.includes("EUR")) return "EUR";
+	if (upperName.includes("REAL") || upperName.includes("BRL")) return "BRL";
+	if (upperName.includes("LIBRA") || upperName.includes("GBP")) return "GBP";
+	return "USD";
+}
+
 export default function ProcessCalculatorPage() {
 	const params = useParams();
 	const router = useRouter();
+	const searchParams = useSearchParams();
 	const processId = params.id as string;
+	const contractIdParam = searchParams.get('contractId');
 
 	const [process, setProcess] = useState<Process | null>(null);
 	const [payments, setPayments] = useState<Payment[]>([]);
@@ -59,6 +71,50 @@ export default function ProcessCalculatorPage() {
 		}
 	}, [cdiAM, txSpotCompra]);
 
+	// Preenche automaticamente as datas de vencimento e busca CDI quando um contrato é selecionado
+	useEffect(() => {
+		if (selectedContract) {
+			let startDate = "";
+			let endDate = "";
+
+			if (selectedContract.imcDtaFechamento) {
+				try {
+					startDate = new Date(selectedContract.imcDtaFechamento).toISOString().split('T')[0];
+					setVencCambioOuFornec(startDate);
+				} catch (e) {
+					console.warn('Failed to parse imcDtaFechamento', selectedContract.imcDtaFechamento);
+				}
+			}
+			if (selectedContract.imcDtaLiquidacao) {
+				try {
+					endDate = new Date(selectedContract.imcDtaLiquidacao).toISOString().split('T')[0];
+					setVencAlongamento(endDate);
+				} catch (e) {
+					console.warn('Failed to parse imcDtaLiquidacao', selectedContract.imcDtaLiquidacao);
+				}
+			}
+
+			// Preencher a taxa do contrato (Tx Spot - Compra) conforme solicitado pelo usuário
+			if (selectedContract.imcFltTxFec) {
+				setTxSpotCompra(String(selectedContract.imcFltTxFec));
+			}
+
+			// Buscar CDI baseado no intervalo do contrato
+			fetchCDI(startDate, endDate)
+				.then((cdiRows) => {
+					if (Array.isArray(cdiRows) && cdiRows.length > 0) {
+						const first = cdiRows[0];
+						// Usar ftxNumFatMes conforme solicitado (Fator Mensal)
+						const value = first.ftxNumFatMes ?? first.ftxNumFatAno ?? first.ftxNumFatDiario ?? 0;
+						setCdiAM(Number(value).toFixed(4));
+					}
+				})
+				.catch((err) => {
+					console.warn('Failed to fetch CDI range', err);
+				});
+		}
+	}, [selectedContract]);
+
 	async function loadProcess() {
 		try {
 			setLoading(true);
@@ -68,17 +124,7 @@ export default function ProcessCalculatorPage() {
 			setPayments(data.payments || []);
 			setParcelsError((data as any).parcelsError || null);
 
-			// Buscar CDI do backend e preencher campo automaticamente (não editável)
-			try {
-				const cdiRows = await fetchCDI();
-				if (Array.isArray(cdiRows) && cdiRows.length > 0) {
-					const latest = cdiRows[0];
-					const value = latest.ftxNumFatAno ?? latest.ftxNumFatMes ?? latest.ftxNumFatDiario ?? 0;
-					setCdiAM(Number(value).toFixed(4));
-				}
-			} catch (err) {
-				console.warn('Failed to fetch CDI', err);
-			}
+
 
 			// Buscar contratos relacionados ao processo específico
 			try {
@@ -88,7 +134,17 @@ export default function ProcessCalculatorPage() {
 					const contractsData = await fetchContractsByProcess(priCod);
 					setContracts(contractsData || []);
 					if (contractsData && contractsData.length > 0) {
-						setSelectedContract(contractsData[0]);
+						// Se temos um contractId na URL, tentamos selecionar ele
+						if (contractIdParam) {
+							const found = contractsData.find(c => String(c.imcCod) === contractIdParam);
+							if (found) {
+								setSelectedContract(found);
+							} else {
+								setSelectedContract(contractsData[0]);
+							}
+						} else {
+							setSelectedContract(contractsData[0]);
+						}
 					}
 				} else {
 					setContracts([]);
@@ -105,6 +161,7 @@ export default function ProcessCalculatorPage() {
 			setLoading(false);
 		}
 	}
+
 
 	async function handleCalculate() {
 		if (!process) return;
@@ -405,36 +462,28 @@ export default function ProcessCalculatorPage() {
 	<table>
 		<thead>
 			<tr>
-				<th>Valor Cambio</th>
+				<th>Vlr. Negociado</th>
+				<th>Vlr. Nacional</th>
 				<th class="text-center">Data Hedge/Cambio</th>
 				<th class="text-center">Data Venc. Cambio</th>
 				<th class="text-center">Prazo</th>
-				<th class="text-center">% do CDI</th>
 				<th class="text-right">Taxa DI</th>
-				<th class="text-right">Tx Hedge Saida/Contr. Cambio</th>
-				<th class="text-right">Tx Hedge Futura/Contr. Cambio</th>
-				<th class="text-right">Custo Hedge/DIF. Tx Cambio x DI</th>
+				<th class="text-right">Taxa Contrato</th>
+				<th class="text-right">Custo Hedge</th>
 			</tr>
 		</thead>
 		<tbody>
 			<tr>
-				<td class="text-right">${formatCurrency(process.mercadoriasValue)}</td>
+				<td class="text-right">${selectedContract?.vlrMneg ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: getCurrencyCode(selectedContract.moeEspNome || 'USD') }).format(selectedContract.vlrMneg) : '-'}</td>
+				<td class="text-right">${selectedContract?.vlrTotalNac ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedContract.vlrTotalNac) : '-'}</td>
 				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
 				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
 				<td class="text-center">${prazo || '0'}</td>
-				<td class="text-center">0,000</td>
 				<td class="text-right">${txPtaxDI || '0'}</td>
 				<td class="text-right">${txSpotCompra || '0'}</td>
-				<td class="text-right">${txFuturaVenc || '0'}</td>
 				<td class="text-right">${formatCurrency(result.totalDisburse)}</td>
 			</tr>
 		</tbody>
-		<tfoot>
-			<tr class="total-row">
-				<td colspan="8" class="text-right"><strong></strong></td>
-				<td class="text-right"><strong>${formatCurrency(result.totalDisburse)}</strong></td>
-			</tr>
-		</tfoot>
 	</table>
 
 	<div class="section-title">Encargos</div>
@@ -589,11 +638,14 @@ export default function ProcessCalculatorPage() {
 								/>
 							</div>
 							<div className="space-y-2">
-								<Label className="text-sm font-medium text-gray-700">Valor Cambio (USD)</Label>
+								<Label className="text-sm font-medium text-gray-700">Valor Moeda Negociada</Label>
 								<Input
-									value={formatCurrency(process.mercadoriasValue)}
+									value={selectedContract?.vlrMneg ? new Intl.NumberFormat('pt-BR', {
+										style: 'currency',
+										currency: getCurrencyCode(selectedContract.moeEspNome || 'USD')
+									}).format(selectedContract.vlrMneg) : formatCurrency(process.mercadoriasValue)}
 									disabled
-									className="bg-gray-50 border-gray-200 font-semibold"
+									className="bg-gray-50 border-gray-200"
 								/>
 							</div>
 
@@ -797,15 +849,15 @@ export default function ProcessCalculatorPage() {
 												<td className="px-3 py-2 border border-gray-200 text-right font-mono text-xs">
 													{txFuturaVenc || "-"}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-semibold text-xs">
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
 													{formatCurrency(payment.value)}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-semibold text-xs text-gray-900">
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900">
 													{payment.calculatedInterest
 														? formatCurrency(payment.calculatedInterest)
 														: "-"}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-semibold text-xs text-gray-900">
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900">
 													{payment.calculatedInterest
 														? formatCurrency(payment.value + payment.calculatedInterest)
 														: formatCurrency(payment.value)}
@@ -832,15 +884,15 @@ export default function ProcessCalculatorPage() {
 											<td colSpan={6} className="px-3 py-2 text-right font-semibold text-gray-900 text-sm border border-gray-200">
 												TOTAIS:
 											</td>
-											<td className="px-3 py-2 text-right font-bold text-gray-900 text-sm border border-gray-200">
+											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
 												{formatCurrency(payments.reduce((sum, p) => sum + p.value, 0))}
 											</td>
-											<td className="px-3 py-2 text-right font-bold text-gray-900 text-sm border border-gray-200">
+											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
 												{formatCurrency(
 													payments.reduce((sum, p) => sum + (p.calculatedInterest || 0), 0)
 												)}
 											</td>
-											<td className="px-3 py-2 text-right font-bold text-gray-900 text-sm border border-gray-200">
+											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
 												{formatCurrency(
 													payments.reduce((sum, p) => sum + p.value + (p.calculatedInterest || 0), 0)
 												)}
