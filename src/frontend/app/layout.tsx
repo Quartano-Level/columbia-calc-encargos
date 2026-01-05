@@ -1,12 +1,11 @@
 import type { Metadata } from 'next'
-import { Geist, Geist_Mono } from 'next/font/google'
+import { DM_Sans } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { AppLayout } from '@/components/app-layout'
 import { AuthProvider } from '@/components/auth-provider'
 import './globals.css'
 
-const _geist = Geist({ subsets: ["latin"] });
-const _geistMono = Geist_Mono({ subsets: ["latin"] });
+const dmSans = DM_Sans({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: 'Calculadora de Encargos Financeiros',
@@ -21,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR">
-      <body className={`font-sans antialiased`}>
+      <body className={`${dmSans.className} antialiased`}>
         <AuthProvider>
           <AppLayout>{children}</AppLayout>
         </AuthProvider>
