@@ -452,18 +452,21 @@ class ConexosService {
     }
   }
 
-  async getCDI(date?: string) {
+  async getCDI(startDate?: string, endDate?: string) {
     await this.ensureSid();
 
-    // Construir filterList - se data fornecida, filtrar por ftxDtaTaxa
+    // Construir filterList - filtrar por intervalo se fornecido
     const filterList: Record<string, any> = {};
-    if (date) {
+    if (startDate) {
       // Converter data ISO (YYYY-MM-DD) para timestamp em milissegundos (meia-noite UTC)
-      const dateObj = new Date(date);
+      const dateObj = new Date(startDate);
       dateObj.setUTCHours(0, 0, 0, 0);
-      const timestamp = dateObj.getTime();
-      filterList["ftxDtaTaxa#GE"] = timestamp;
-      filterList["ftxDtaTaxa#LE"] = timestamp;
+      filterList["ftxDtaTaxa#GE"] = dateObj.getTime();
+    }
+    if (endDate) {
+      const dateObj = new Date(endDate);
+      dateObj.setUTCHours(0, 0, 0, 0);
+      filterList["ftxDtaTaxa#LE"] = dateObj.getTime();
     }
 
     const body = {
