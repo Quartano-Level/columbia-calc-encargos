@@ -1,94 +1,126 @@
-import { CalculationResult } from '../types/index.js';
+import { CalculationResult, CalculationInput, Payment } from '../types/index.js';
 import { CalculationResultSchema } from '../types/schemas.js';
 import { conexosService } from './conexos.js';
 import { saveCalculation, getCalculationById } from './supabase.js';
-import { calculationInputHash, logEvent } from '../utils/index.js';
+import { calculationInputHash, logEvent, boxLog } from '../utils/index.js';
 
-export async function orchestrateCalculation(input: any): Promise<CalculationResult> {
+export async function orchestrateCalculation(input: CalculationInput): Promise<CalculationResult> {
+  boxLog('Service: orchestrateCalculation Input', input);
+
   // 1. Buscar dados do processo no Conexos
   const process = await conexosService.getProcessById(input.processId);
   const cdiList = await conexosService.getCDI();
   const parcelas = await conexosService.getParcelsByProcessId(input.processId);
   const despesas = await conexosService.getDespesasByProcessId(input.processId);
 
+  boxLog('Conexos Data Fetched', {
+    processNumber: process?.imcNumNumero,
+    cdiFirst: cdiList?.[0],
+    parcelsCount: parcelas?.length,
+    despesasCount: despesas?.length
+  });
+
   // 2. Normalizar e calcular principais campos
-  // garantir que processoId e clienteId sejam strings (zod exige string)
   const processoId = String(process?.imcCod ?? input.processId ?? '');
-  const clienteId = String(process?.cliCod ?? input.clienteId ?? 'N/A');
+  const clienteId = String(process?.cliCod ?? (input as any).clienteId ?? 'N/A');
   const fobTotal = Number(process?.vlrMneg) || 0;
   const freteTotal = Number(process?.freteTotal) || 0;
   const seguroTotal = Number(process?.seguroTotal) || 0;
   const cifTotal = fobTotal + freteTotal + seguroTotal;
 
-  // CDI: pegar taxa mais recente
-  const cdiAM = Number(cdiList?.[0]?.ftxNumFatDiario) || input.taxaCDI || 0;
+  // CDI: PRIORIZAR INPUT MANUAL (CDI Diário)
+  const cdiDiario = input.taxaCDI !== undefined ? Number(input.taxaCDI) : (Number(cdiList?.[0]?.ftxNumFatDiario) || 0);
+  const txSpotCompra = Number(input.taxaConecta) || 0;
 
-  // Mapear parcelas para movimentos (converte timestamps numéricos para string ISO 'YYYY-MM-DD')
+  // Mapear parcelas para movimentos
   const toDateIso = (d: any) => {
-    if (!d) return new Date().toISOString();
+    if (!d) return new Date().toISOString().split('T')[0];
     if (typeof d === 'number') return new Date(d).toISOString().split('T')[0];
-    // se já for string, tentar normalizar
     try { return new Date(d).toISOString().split('T')[0]; } catch { return String(d); }
   };
 
-  const movimentos = Array.isArray(parcelas)
-    ? parcelas.map((p: any) => ({
-        data: toDateIso(p.pipDtaVcto || p.data || p.dtaVcto || p.dta),
-        historico: p.historico || p.descricao || 'Parcela',
-        diasCorridos: Number(p.pipNumDiasVcto || p.diasCorridos || 0) || 0,
-        txSpot: Number(p.txSpot || p.tx_spot || 0) || 0,
-        valorUSD: Number(p.pipMnyValor || p.valorUSD || 0) || 0,
-        encargos: Number(p.encargos || p.encargo || 0) || 0,
-        total: Number(p.pipMnyValor || p.valorUSD || 0) + (Number(p.encargos || p.encargo || 0) || 0),
-      }))
-    : [];
+  // PRIORIZAR PAGAMENTOS ENVIADOS PELO FRONTEND
+  const inputPayments = Array.isArray(input.payments) && input.payments.length > 0 ? input.payments : null;
+  const rawSource = inputPayments || parcelas || [];
+
+  const movimentos = rawSource.map((p: any) => {
+    const valorUSD = Number(p.pipMnyValor || p.valorUSD || p.value || 0) || 0;
+    const dias = Number(p.pipNumDiasVcto || p.diasCorridos || p.days || 0) || 0;
+
+    // Fórmula: Juros = Valor * (CDI / 100) * Dias
+    const encargos = valorUSD * (cdiDiario / 100) * (dias || 0);
+
+    return {
+      data: toDateIso(p.pipDtaVcto || p.data || p.dtaVcto || p.paymentDate || p.dta),
+      historico: p.historico || p.description || p.descricao || 'Parcela',
+      diasCorridos: dias,
+      txSpot: txSpotCompra,
+      valorUSD: valorUSD,
+      encargos: encargos,
+      total: valorUSD + encargos,
+    };
+  });
+
+  boxLog('Processed Movimentos', movimentos);
+
+  const totalInterest = movimentos.reduce((acc: number, m: any) => acc + m.encargos, 0);
+  const totalDisburse = movimentos.reduce((acc: number, m: any) => acc + m.valorUSD, 0);
 
   // Mapear despesas
   const despesasMap = Array.isArray(despesas)
     ? despesas.map((d: any) => ({
-        tipo: d.tipo || '',
-        descricao: d.descricao || '',
-        valor: Number(d.valor) || 0,
-      }))
+      tipo: d.tipo || '',
+      descricao: d.descricao || '',
+      valor: Number(d.valor) || 0,
+    }))
     : [];
-
-  // Summary
-  const summary = {
-    numeroMovimentos: movimentos.length,
-    totalDesembolso: movimentos.reduce((acc, m) => acc + m.total, 0),
-    calculadoEm: new Date().toISOString(),
-  };
 
   const result: CalculationResult = {
     processId: processoId,
-    // Compatibilidade com frontend que espera `processoId`
     clienteId,
     custosUSD: { fobTotal, freteTotal, seguroTotal, cifTotal },
     cambio: {
-      cdiAM,
-      txSpotCompra: 0,
-      txFuturaVenc: 0,
-      taxaDolarFiscal: 0,
-      valorCIFbrl: 0,
+      cdiAM: cdiDiario,
+      txSpotCompra,
+      txFuturaVenc: txSpotCompra + cdiDiario,
+      taxaDolarFiscal: Number(process?.imcFltTxFec) || 0,
+      valorCIFbrl: cifTotal * (Number(process?.imcFltTxFec) || 1),
     },
     impostos: {},
     creditos: {},
     despesas: despesasMap,
-    encargos: {},
-    custos: {},
+    encargos: {
+      total: totalInterest,
+    },
+    custos: {
+      custoTotalImportacao: totalDisburse + totalInterest,
+    },
     precos: {},
     movimentos,
-    summary,
-    totalDisburse: summary.totalDesembolso || 0,
-    totalInterest: 0,
-    totalCharges: 0,
-    payments: [],
+    summary: {
+      numeroMovimentos: movimentos.length,
+      totalDesembolso: totalDisburse + totalInterest,
+      calculadoEm: new Date().toISOString(),
+      calculationDate: new Date().toISOString(),
+      taxaCDI: cdiDiario,
+      taxaConecta: txSpotCompra,
+      effectiveRate: (txSpotCompra + cdiDiario) / 100,
+    },
+    totalDisburse: totalDisburse,
+    totalInterest: totalInterest,
+    totalCharges: totalDisburse + totalInterest,
+    payments: rawSource.map((p: any, idx: number) => ({
+      ...p,
+      calculatedInterest: movimentos[idx].encargos
+    })),
   };
+
+  boxLog('Calculation Final Result', result);
 
   // 3. Validar
   CalculationResultSchema.parse(result);
 
-  // 4. Persistir no Supabase (salva mapeado para colunas corretas)
+  // 4. Persistir no Supabase
   await saveCalculation(result, calculationInputHash(input));
 
   // 5. Logging

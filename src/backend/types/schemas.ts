@@ -35,5 +35,13 @@ export const CalculationResultSchema = z.object({
     numeroMovimentos: z.number(),
     totalDesembolso: z.number(),
     calculadoEm: z.string(),
+    calculationDate: z.string().optional(),
+    taxaCDI: z.number().optional(),
+    taxaConecta: z.number().optional(),
+    effectiveRate: z.number().optional(),
   }),
+  totalDisburse: z.number(),
+  totalInterest: z.number(),
+  totalCharges: z.number(),
+  payments: z.array(z.any()),
 });
