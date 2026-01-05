@@ -7,7 +7,7 @@ import { useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export default function LoginPage() {
-  const { user, loading } = useAuth()
+  const { user, loading, isDevMode, signInWithAzure } = useAuth()
   const router = useRouter()
 
   useEffect(() => {
@@ -16,6 +16,11 @@ export default function LoginPage() {
       router.push('/')
     }
   }, [user, loading, router])
+
+  const handleDevLogin = async () => {
+    // A função signInWithAzure já faz o bypass se isDevMode for true
+    await signInWithAzure()
+  }
 
   if (loading) {
     return (
@@ -45,7 +50,19 @@ export default function LoginPage() {
           <div className="space-y-2">
             <MicrosoftLoginButton />
           </div>
-          <div className="text-xs text-center text-muted-foreground">
+
+          {isDevMode && (
+            <div className="pt-2 border-t border-dashed border-gray-200 mt-4">
+              <button
+                onClick={handleDevLogin}
+                className="w-full py-2 px-4 bg-orange-50 hover:bg-orange-100 text-orange-700 text-sm font-medium rounded-lg border border-orange-200 transition-colors"
+              >
+                🔓 Acessar como Desenvolvedor (Bypass)
+              </button>
+            </div>
+          )}
+
+          <div className="text-xs text-center text-muted-foreground pt-2">
             Ao entrar, você concorda com nossos Termos de Serviço e Política de Privacidade
           </div>
         </CardContent>
