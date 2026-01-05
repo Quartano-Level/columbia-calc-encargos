@@ -24,6 +24,34 @@ function getCurrencyCode(name: string): string {
 	return "USD";
 }
 
+// Helper to format rates (CDI, Spot, etc.)
+// 5 -> 5,0; 0,0551310000 -> 0,055131
+function formatRate(value: number | string | undefined | null): string {
+	const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+	if (isNaN(num)) return "0,0";
+
+	return new Intl.NumberFormat("pt-BR", {
+		minimumFractionDigits: 1,
+		maximumFractionDigits: 10,
+	}).format(num);
+}
+
+// Helper to format currency for input (1000 -> 1.000,00)
+function formatCurrencyInput(value: string | number): string {
+	const num = typeof value === 'string' ? parseFloat(value.replace(/\./g, '').replace(',', '.')) : Number(value);
+	if (isNaN(num)) return "";
+	return new Intl.NumberFormat("pt-BR", {
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	}).format(num);
+}
+
+// Helper to parse currency input back to number
+function parseCurrencyInput(value: string): number {
+	const cleanValue = value.replace(/\./g, "").replace(",", ".");
+	return parseFloat(cleanValue) || 0;
+}
+
 export default function ProcessCalculatorPage() {
 	const params = useParams();
 	const router = useRouter();
@@ -48,8 +76,13 @@ export default function ProcessCalculatorPage() {
 	const [vencCambioOuFornec, setVencCambioOuFornec] = useState("");
 	const [vencAlongamento, setVencAlongamento] = useState("");
 
+	// State for manual expense entry
+	const [newExpData, setNewExpData] = useState("");
+	const [newExpDias, setNewExpDias] = useState("");
+	const [newExpValor, setNewExpValor] = useState("");
+
 	// Taxas - BUSCADAS DO CONEXOS (editáveis)
-	const [cdiAM, setCdiAM] = useState(""); // CDI A.M (aparece 2x na planilha)
+	const [cdiDiario, setCdiDiario] = useState(""); // CDI Diário (anteriormente CDI A.M)
 	const [txPtaxDI, setTxPtaxDI] = useState(""); // Tx Ptax D.I (calculado automaticamente)
 	const [txSpotCompra, setTxSpotCompra] = useState(""); // Tx Spot - Compra
 	const [txFuturaVenc, setTxFuturaVenc] = useState(""); // Tx Futura - Venc (calculado automaticamente)
@@ -60,60 +93,127 @@ export default function ProcessCalculatorPage() {
 
 	// Calcula automaticamente Tx Ptax D.I e Tx Futura - Venc quando CDI ou Tx Spot mudam
 	useEffect(() => {
-		if (cdiAM && txSpotCompra) {
-			// Fórmula: Tx Ptax D.I = CDI A.M / 100
-			const calculatedTxPtaxDI = parseFloat(cdiAM) / 100;
-			setTxPtaxDI(calculatedTxPtaxDI.toFixed(4));
+		if (cdiDiario && txSpotCompra) {
+			// Fórmula: Tx Ptax D.I = CDI Diário
+			const calculatedTxPtaxDI = parseFloat(cdiDiario);
+			setTxPtaxDI(calculatedTxPtaxDI.toFixed(10));
 
-			// Fórmula: Tx Futura - Venc = Tx Spot - Compra + (CDI A.M / 100)
-			const calculatedTxFuturaVenc = parseFloat(txSpotCompra) + (parseFloat(cdiAM) / 100);
-			setTxFuturaVenc(calculatedTxFuturaVenc.toFixed(4));
+			// Fórmula: Tx Futura - Venc = Tx Spot - Compra + CDI Diário
+			const calculatedTxFuturaVenc = parseFloat(txSpotCompra) + parseFloat(cdiDiario);
+			setTxFuturaVenc(calculatedTxFuturaVenc.toFixed(10));
 		}
-	}, [cdiAM, txSpotCompra]);
+	}, [cdiDiario, txSpotCompra]);
 
 	// Preenche automaticamente as datas de vencimento e busca CDI quando um contrato é selecionado
 	useEffect(() => {
-		if (selectedContract) {
-			let startDate = "";
-			let endDate = "";
-
-			if (selectedContract.imcDtaFechamento) {
-				try {
-					startDate = new Date(selectedContract.imcDtaFechamento).toISOString().split('T')[0];
-					setVencCambioOuFornec(startDate);
-				} catch (e) {
-					console.warn('Failed to parse imcDtaFechamento', selectedContract.imcDtaFechamento);
-				}
+		// PREENCHIMENTO AUTOMÁTICO REMOVIDO: O próprio usuário insira as datas e taxa spot
+		/*
+		if (selectedContract.imcDtaFechamento) {
+			try {
+				startDate = new Date(selectedContract.imcDtaFechamento).toISOString().split('T')[0];
+				setVencCambioOuFornec(startDate);
+			} catch (e) {
+				console.warn('Failed to parse imcDtaFechamento', selectedContract.imcDtaFechamento);
 			}
-			if (selectedContract.imcDtaLiquidacao) {
-				try {
-					endDate = new Date(selectedContract.imcDtaLiquidacao).toISOString().split('T')[0];
-					setVencAlongamento(endDate);
-				} catch (e) {
-					console.warn('Failed to parse imcDtaLiquidacao', selectedContract.imcDtaLiquidacao);
-				}
+		}
+		if (selectedContract.imcDtaLiquidacao) {
+			try {
+				endDate = new Date(selectedContract.imcDtaLiquidacao).toISOString().split('T')[0];
+				setVencAlongamento(endDate);
+			} catch (e) {
+				console.warn('Failed to parse imcDtaLiquidacao', selectedContract.imcDtaLiquidacao);
 			}
+		}
 
-			// Preencher a taxa do contrato (Tx Spot - Compra) conforme solicitado pelo usuário
-			if (selectedContract.imcFltTxFec) {
-				setTxSpotCompra(String(selectedContract.imcFltTxFec));
-			}
+		// Preencher a taxa do contrato (Tx Spot - Compra) conforme solicitado pelo usuário
+		if (selectedContract.imcFltTxFec) {
+			setTxSpotCompra(String(selectedContract.imcFltTxFec));
+		}
+		*/
 
-			// Buscar CDI baseado no intervalo do contrato
-			fetchCDI(startDate, endDate)
+		// Buscar CDI baseado no intervalo do contrato se as datas estiverem preenchidas
+		if (vencCambioOuFornec && vencAlongamento) {
+			fetchCDI(vencCambioOuFornec, vencAlongamento)
 				.then((cdiRows) => {
 					if (Array.isArray(cdiRows) && cdiRows.length > 0) {
 						const first = cdiRows[0];
-						// Usar ftxNumFatMes conforme solicitado (Fator Mensal)
-						const value = first.ftxNumFatMes ?? first.ftxNumFatAno ?? first.ftxNumFatDiario ?? 0;
-						setCdiAM(Number(value).toFixed(4));
+						// Usar ftxNumFatDiario conforme solicitado (CDI Diário)
+						const value = first.ftxNumFatDiario ?? first.ftxNumFatMes ?? first.ftxNumFatAno ?? 0;
+						setCdiDiario(Number(value).toFixed(10));
 					}
 				})
 				.catch((err) => {
 					console.warn('Failed to fetch CDI range', err);
 				});
 		}
-	}, [selectedContract]);
+	}, [selectedContract, vencCambioOuFornec, vencAlongamento]);
+
+	// GERAÇÃO AUTOMÁTICA DE MOVIMENTO: Cria uma linha de despesa quando as datas e taxa spot são preenchidas
+	useEffect(() => {
+		if (vencCambioOuFornec && vencAlongamento && txSpotCompra && process) {
+			const start = new Date(vencCambioOuFornec);
+			const end = new Date(vencAlongamento);
+
+			if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && end >= start) {
+				// Priorizar o valor inserido em 'prazo' se for um número, senão calcular das datas
+				const parsedPrazo = parseInt(prazo, 10);
+				const diffDays = !isNaN(parsedPrazo) ? parsedPrazo : Math.ceil(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+
+				// Valor base: Valor do contrato ou do processo
+				const valueUSD = selectedContract?.vlrMneg || process.mercadoriasValue || 0;
+
+				const autoMovement: Payment = {
+					id: "auto-hedge",
+					type: "cambio",
+					description: "Câmbio",
+					value: valueUSD,
+					paymentDate: vencCambioOuFornec,
+					dueDate: vencAlongamento,
+					days: diffDays,
+				};
+
+				setPayments(prev => {
+					const manualExpenses = prev.filter(p => p.id !== "auto-hedge");
+					return [autoMovement, ...manualExpenses];
+				});
+			}
+		}
+	}, [vencCambioOuFornec, vencAlongamento, txSpotCompra, process, selectedContract, prazo]);
+
+	// Cálculo local de encargos para exibição em tempo real
+	const calculateChargesLocally = (value: number, days: number) => {
+		const cdi = parseFloat(cdiDiario) || 0;
+		return value * (cdi / 100) * (days || 0);
+	};
+
+	function handleAddExpense() {
+		if (!newExpData || !newExpDias || !newExpValor) {
+			alert("Por favor, preencha Data, Dias e Valor para a despesa.");
+			return;
+		}
+
+		const numericValue = parseCurrencyInput(newExpValor);
+		const numericDias = parseInt(newExpDias, 10);
+
+		const expense: Payment = {
+			id: `exp-${Date.now()}`,
+			description: "Despesas",
+			value: numericValue,
+			paymentDate: newExpData,
+			dueDate: newExpData,
+			days: numericDias,
+			calculatedInterest: calculateChargesLocally(numericValue, numericDias)
+		};
+
+		setPayments(prev => [...prev, expense]);
+		setNewExpData("");
+		setNewExpDias("");
+		setNewExpValor("");
+	}
+
+	function handleRemovePayment(id: string) {
+		setPayments(prev => prev.filter(p => p.id !== id));
+	}
 
 	async function loadProcess() {
 		try {
@@ -166,8 +266,8 @@ export default function ProcessCalculatorPage() {
 	async function handleCalculate() {
 		if (!process) return;
 
-		if (!vencCambioOuFornec || !cdiAM || !txSpotCompra) {
-			setError(`Por favor, preencha todos os campos obrigatórios: ${!vencCambioOuFornec ? "Venc. Cambio ou Fornec. " : ""}${!cdiAM ? "CDI A.M " : ""}${!txSpotCompra ? "Tx Spot - Compra" : ""}`);
+		if (!vencCambioOuFornec || !cdiDiario || !txSpotCompra) {
+			setError(`Por favor, preencha todos os campos obrigatórios: ${!vencCambioOuFornec ? "Venc. Cambio ou Fornec. " : ""}${!cdiDiario ? "CDI Diário " : ""}${!txSpotCompra ? "Tx Spot - Compra" : ""}`);
 			return;
 		}
 
@@ -180,7 +280,7 @@ export default function ProcessCalculatorPage() {
 				processId: process.id,
 				// Backend expects these field names:
 				emissionDate: vencCambioOuFornec || new Date().toISOString().split('T')[0],
-				taxaCDI: parseFloat(cdiAM || "0"),
+				taxaCDI: parseFloat(cdiDiario || "0"),
 				taxaConecta: parseFloat(txSpotCompra || "0"),
 				// Additional fields for context
 				prazo,
@@ -223,9 +323,9 @@ export default function ProcessCalculatorPage() {
 					})) || [],
 					summary: {
 						calculationDate: calculationResult.summary?.calculadoEm || new Date().toISOString(),
-						taxaCDI: parseFloat(cdiAM || "0") || 0,
+						taxaCDI: parseFloat(cdiDiario || "0") || 0,
 						taxaConecta: parseFloat(txSpotCompra || "0") || 0,
-						effectiveRate: ((parseFloat(cdiAM || "0") || 0) / 365) / 100,
+						effectiveRate: (parseFloat(cdiDiario || "0") || 0) / 100,
 					},
 				};
 				console.log("Mapped result:", mappedResult);
@@ -300,6 +400,7 @@ export default function ProcessCalculatorPage() {
 <head>
 	<meta charset="UTF-8">
 	<title>Encargos Financeiros - ${process.processNumber}</title>
+	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 	<style>
 		@page {
 			size: A4;
@@ -311,7 +412,7 @@ export default function ProcessCalculatorPage() {
 			box-sizing: border-box;
 		}
 		body {
-			font-family: Arial, sans-serif;
+			font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 			font-size: 10pt;
 			color: #000;
 		}
@@ -447,17 +548,14 @@ export default function ProcessCalculatorPage() {
 
 	<div class="info-section">
 		<div class="info-row">
-			<span><span class="info-label">CDI anual:</span> ${result.summary.taxaCDI}%</span>
+			<span><span class="info-label">CDI Diário:</span> ${formatRate(result.summary.taxaCDI)}%</span>
 		</div>
 		<div class="info-row">
-			<span><span class="info-label">CDI diário:</span> ${(result.summary.taxaCDI / 365).toFixed(10)}%</span>
-		</div>
-		<div class="info-row">
-			<span><span class="info-label">Juros diário:</span> ${result.summary.effectiveRate ? result.summary.effectiveRate.toFixed(10) : '0'}%</span>
+			<span><span class="info-label">Juros:</span> ${result.summary.effectiveRate ? formatRate(result.summary.effectiveRate * 100) : '0,0'}%</span>
 		</div>
 	</div>
 
-	<div class="section-title">Custo Hedge/DIF. Tx DI x Contr. Cambio</div>
+	<div class="section-title">Custo Hedge/Câmbio</div>
 	
 	<table>
 		<thead>
@@ -479,8 +577,8 @@ export default function ProcessCalculatorPage() {
 				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
 				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
 				<td class="text-center">${prazo || '0'}</td>
-				<td class="text-right">${txPtaxDI || '0'}</td>
-				<td class="text-right">${txSpotCompra || '0'}</td>
+				<td class="text-right">${formatRate(txPtaxDI)}</td>
+				<td class="text-right">${formatRate(txSpotCompra)}</td>
 				<td class="text-right">${formatCurrency(result.totalDisburse)}</td>
 			</tr>
 		</tbody>
@@ -507,7 +605,7 @@ export default function ProcessCalculatorPage() {
 					<td class="text-center">${formatDate(payment.paymentDate)}</td>
 					<td class="text-center">${formatDate(payment.dueDate)}</td>
 					<td class="text-center">${payment.days}</td>
-					<td class="text-center">${(payment.interestRate! * 100).toFixed(10)}</td>
+					<td class="text-center">${formatRate(payment.interestRate! * 100)}</td>
 					<td class="text-right">${formatCurrency(payment.value)}</td>
 					<td class="text-right">${formatCurrency(payment.calculatedInterest!)}</td>
 				</tr>
@@ -527,7 +625,7 @@ export default function ProcessCalculatorPage() {
 	</table>
 
 	<div class="cdi-box">
-		CDI: ${result.summary.taxaCDI}%
+		CDI Diário: ${formatRate(result.summary.taxaCDI)}%
 	</div>
 
 	<div class="footer">
@@ -688,16 +786,16 @@ export default function ProcessCalculatorPage() {
 								/>
 							</div>
 							<div className="space-y-2">
-								<Label htmlFor="cdiAM" className="text-sm font-medium text-gray-700">
-									CDI A.M (%)
+								<Label htmlFor="cdiDiario" className="text-sm font-medium text-gray-700">
+									CDI Diário (%)
 								</Label>
 								<Input
-									id="cdiAM"
+									id="cdiDiario"
 									type="number"
-									step="0.0001"
-									value={cdiAM}
-									readOnly
-									className="border-gray-300 focus:border-gray-400 font-mono"
+									step="0.0000000001"
+									value={cdiDiario}
+									onChange={(e) => setCdiDiario(e.target.value)}
+									className="border-gray-300 focus:border-gray-400"
 								/>
 							</div>
 						</div>
@@ -730,7 +828,7 @@ export default function ProcessCalculatorPage() {
 									value={txPtaxDI}
 									onChange={(e) => setTxPtaxDI(e.target.value)}
 									placeholder="Calculado automaticamente"
-									className="bg-gray-50 border-gray-200 font-mono text-gray-600"
+									className="bg-gray-50 border-gray-200 text-gray-600"
 								/>
 							</div>
 							<div className="space-y-2">
@@ -743,10 +841,9 @@ export default function ProcessCalculatorPage() {
 									step="0.0001"
 									value={txSpotCompra}
 									onChange={(e) => setTxSpotCompra(e.target.value)}
-									placeholder="0.0000"
-									className="border-gray-300 focus:border-gray-400 font-mono"
+									placeholder="0,0"
+									className="border-gray-300 focus:border-gray-400"
 								/>
-								<p className="text-xs text-gray-500">Digite(Será obtida do Conexos em breve)</p>
 							</div>
 							<div className="space-y-2">
 								<Label htmlFor="txFuturaVenc" className="text-sm font-medium text-gray-700">
@@ -759,7 +856,7 @@ export default function ProcessCalculatorPage() {
 									value={txFuturaVenc}
 									readOnly
 									placeholder="Calculado automaticamente"
-									className="bg-gray-50 border-gray-200 font-mono text-gray-600"
+									className="bg-gray-50 border-gray-200 text-gray-600"
 								/>
 							</div>
 						</div>
@@ -797,7 +894,7 @@ export default function ProcessCalculatorPage() {
 											Histórico
 										</th>
 										<th className="px-3 py-2 text-center text-xs font-medium border border-gray-600">
-											Data
+											Dias
 										</th>
 										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
 											Tx Ptax D.I
@@ -817,9 +914,75 @@ export default function ProcessCalculatorPage() {
 										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
 											Total
 										</th>
+										<th className="px-3 py-2 text-center text-xs font-medium border border-gray-600 w-10">
+											Ações
+										</th>
 									</tr>
 								</thead>
 								<tbody>
+									{/* Linha de entrada manual para Despesas */}
+									<tr className="bg-blue-50/50">
+										<td className="px-2 py-2 border border-blue-100">
+											<Input
+												type="date"
+												value={newExpData}
+												onChange={(e) => setNewExpData(e.target.value)}
+												className="h-8 text-xs border-blue-200 focus:border-blue-300"
+											/>
+										</td>
+										<td className="px-2 py-2 border border-blue-100 italic text-xs text-blue-600">
+											Despesas (Automático)
+										</td>
+										<td className="px-2 py-2 border border-blue-100">
+											<Input
+												type="number"
+												placeholder="Dias"
+												value={newExpDias}
+												onChange={(e) => setNewExpDias(e.target.value)}
+												className="h-8 text-xs border-blue-200 focus:border-blue-300 text-center"
+											/>
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
+											-
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
+											-
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
+											-
+										</td>
+										<td className="px-2 py-2 border border-blue-100">
+											<Input
+												type="text"
+												placeholder="Valor USD"
+												value={newExpValor}
+												onChange={(e) => setNewExpValor(e.target.value)}
+												onBlur={(e) => {
+													const formatted = formatCurrencyInput(e.target.value);
+													if (formatted) setNewExpValor(formatted);
+												}}
+												className="h-8 text-xs border-blue-200 focus:border-blue-300"
+											/>
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-right text-xs text-blue-700 font-medium">
+											{newExpValor && newExpDias ? formatCurrency(calculateChargesLocally(parseCurrencyInput(newExpValor), parseInt(newExpDias, 10))) : "-"}
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-right text-xs text-blue-900 font-bold">
+											{newExpValor && newExpDias
+												? formatCurrency(parseCurrencyInput(newExpValor) + calculateChargesLocally(parseCurrencyInput(newExpValor), parseInt(newExpDias, 10)))
+												: "-"}
+										</td>
+										<td className="px-2 py-2 border border-blue-100 text-center">
+											<Button
+												size="sm"
+												onClick={handleAddExpense}
+												className="h-8 bg-[#337ab7] hover:bg-blue-800 text-xs px-2"
+											>
+												Adicionar
+											</Button>
+										</td>
+									</tr>
+
 									{payments.length > 0 ? (
 										payments.map((payment, index) => (
 											<tr
@@ -832,41 +995,49 @@ export default function ProcessCalculatorPage() {
 												<td className="px-3 py-2 border border-gray-200">
 													<div className="flex flex-col gap-1">
 														<span className="text-sm font-medium text-gray-900">{payment.description}</span>
-														<Badge variant="outline" className="w-fit text-xs">
-															{payment.type}
-														</Badge>
 													</div>
 												</td>
 												<td className="px-3 py-2 border border-gray-200 text-center text-xs">
-													{new Date(payment.dueDate).toLocaleDateString("pt-BR")}
+													<div className="flex items-center justify-center gap-1">
+														<span className="font-semibold text-gray-900">{payment.days}</span>
+														<span className="text-[10px] text-gray-400 italic">dias</span>
+													</div>
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-mono text-xs">
-													{txPtaxDI || "-"}
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
+													{txPtaxDI ? formatRate(txPtaxDI) : "-"}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-mono text-xs">
-													{txSpotCompra || "-"}
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
+													{txSpotCompra ? formatRate(txSpotCompra) : "-"}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right font-mono text-xs">
-													{txFuturaVenc || "-"}
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
+													{txFuturaVenc ? formatRate(txFuturaVenc) : "-"}
 												</td>
 												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
 													{formatCurrency(payment.value)}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900">
-													{payment.calculatedInterest
-														? formatCurrency(payment.calculatedInterest)
-														: "-"}
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-blue-700 font-medium">
+													{formatCurrency(payment.calculatedInterest || calculateChargesLocally(payment.value, payment.days || 0))}
 												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900">
-													{payment.calculatedInterest
-														? formatCurrency(payment.value + payment.calculatedInterest)
-														: formatCurrency(payment.value)}
+												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900 font-bold">
+													{formatCurrency(payment.value + (payment.calculatedInterest || calculateChargesLocally(payment.value, payment.days || 0)))}
+												</td>
+												<td className="px-3 py-2 border border-gray-200 text-center">
+													<Button
+														variant="ghost"
+														size="sm"
+														onClick={() => handleRemovePayment(payment.id)}
+														className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+													>
+														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+														</svg>
+													</Button>
 												</td>
 											</tr>
 										))
 									) : (
 										<tr>
-											<td colSpan={9} className="px-4 py-8 text-center text-gray-500 border border-gray-200">
+											<td colSpan={10} className="px-4 py-8 text-center text-gray-500 border border-gray-200">
 												<div className="flex flex-col items-center gap-2">
 													<svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 														<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -889,14 +1060,15 @@ export default function ProcessCalculatorPage() {
 											</td>
 											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
 												{formatCurrency(
-													payments.reduce((sum, p) => sum + (p.calculatedInterest || 0), 0)
+													payments.reduce((sum, p) => sum + (p.calculatedInterest || calculateChargesLocally(p.value, p.days || 0)), 0)
 												)}
 											</td>
 											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
 												{formatCurrency(
-													payments.reduce((sum, p) => sum + p.value + (p.calculatedInterest || 0), 0)
+													payments.reduce((sum, p) => sum + p.value + (p.calculatedInterest || calculateChargesLocally(p.value, p.days || 0)), 0)
 												)}
 											</td>
+											<td className="px-3 py-2 border border-gray-200 bg-gray-50"></td>
 										</tr>
 									</tfoot>
 								)}
@@ -909,9 +1081,9 @@ export default function ProcessCalculatorPage() {
 								<svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
 								</svg>
-								<span className="text-sm font-semibold text-gray-700">CDI:</span>
+								<span className="text-sm font-semibold text-gray-700">CDI Diário:</span>
 							</div>
-							<span className="text-xl font-bold text-gray-900">{cdiAM}%</span>
+							<span className="text-xl font-bold text-gray-900">{formatRate(cdiDiario)}%</span>
 						</div>
 
 						<Button
@@ -1001,17 +1173,17 @@ export default function ProcessCalculatorPage() {
 								</h3>
 								<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
 									<div>
-										<p className="text-xs text-gray-600 mb-1">CDI A.M</p>
-										<p className="font-semibold text-sm text-gray-900">{result.summary.taxaCDI}%</p>
+										<p className="text-xs text-gray-600 mb-1">CDI Diário</p>
+										<p className="font-semibold text-sm text-gray-900">{formatRate(result.summary.taxaCDI)}%</p>
 									</div>
 									<div>
 										<p className="text-xs text-gray-600 mb-1">Tx Spot - Compra</p>
-										<p className="font-semibold text-sm text-gray-900">{result.summary.taxaConecta}%</p>
+										<p className="font-semibold text-sm text-gray-900">{formatRate(result.summary.taxaConecta)}%</p>
 									</div>
 									<div>
 										<p className="text-xs text-gray-600 mb-1">Taxa Efetiva</p>
 										<p className="font-semibold text-sm text-gray-900">
-											{result.summary.effectiveRate ? result.summary.effectiveRate.toFixed(4) : '0'}%
+											{result.summary.effectiveRate ? formatRate(result.summary.effectiveRate * 100) : '0,0'}%
 										</p>
 									</div>
 									<div>
@@ -1060,8 +1232,8 @@ export default function ProcessCalculatorPage() {
 															{payment.days} dias
 														</span>
 													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-center font-mono text-xs">
-														{(payment.interestRate! * 100).toFixed(4)}%
+													<td className="px-3 py-2 border-t border-gray-200 text-center text-xs">
+														{formatRate(payment.interestRate! * 100)}%
 													</td>
 													<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
 														{formatCurrency(payment.calculatedInterest!)}

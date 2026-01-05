@@ -17,7 +17,7 @@ export interface Process {
 
 export interface Payment {
 	id: string;
-	type: "cambio" | "despesa" | "frete" | "seguro" | "outros";
+	type?: "cambio" | "despesa" | "frete" | "seguro" | "outros";
 	description: string;
 	value: number;
 	paymentDate: string;

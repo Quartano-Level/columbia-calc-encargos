@@ -100,7 +100,7 @@ export default function CalculationDetailPage() {
             <h3 className="font-medium mb-2">Resumo</h3>
             <div className="text-sm text-gray-700 mb-2"><strong>Processo:</strong> {calculation.processo_id ?? '—'}</div>
             <div className="text-sm text-gray-700 mb-2"><strong>Cliente:</strong> {calculation.cliente_id ?? calculation.payload?.clienteId ?? '—'}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Total desembolso:</strong> {currency.format(Number(calculation.total_desembolso ?? 0))}</div>
+            <div className="text-sm text-gray-700 mb-2"><strong>Valor:</strong> {currency.format(Number(calculation.total_desembolso ?? 0))}</div>
             <div className="text-sm text-gray-700 mb-2"><strong>Total movimentos:</strong> {currency.format(totalMovimentos)}</div>
             <div className="text-sm text-gray-700 mb-2"><strong>Calculado em:</strong> {calculation.calculated_at ? new Date(calculation.calculated_at).toLocaleString() : '—'}</div>
             <div className="text-sm mt-3"><strong>Status:</strong> <span className={`px-2 py-1 rounded ${calculation.status === 'submitted' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{calculation.status}</span></div>
