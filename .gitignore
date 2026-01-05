@@ -1,0 +1,19 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# env files
+.env
+.env.local
+
+**/node_modules
+**/dist
+**/build
+
+# **/._* files
+._*
+
+# n8n workflows
+src/n8n-workflows
+src/reference
+**/*.md
+**/*.csv
+**/*.xlsx

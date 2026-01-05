@@ -1,0 +1,956 @@
+{
+  "documentation": "Novos nós para adicionar ao workflow n8n - Finance Calculator",
+  "instructions": "Copie e cole estes nós no array 'nodes' do workflow n8n-workflow-supabase-integrated.json",
+  "notes": "IMPORTANTE: Code nodes só recebem 1 input. Não usar Merge antes de Code nodes. Usar queries Supabase com filters em vez de joins.",
+  
+  "nodes_to_add": [
+    {
+      "node_name": "Supabase - Create Process",
+      "description": "Cria novo processo na tabela processos",
+      "parameters": {
+        "operation": "create",
+        "tableId": "processos",
+        "options": {},
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "cliente_id",
+            "fieldValue": "={{ $json.body.cliente_id }}"
+          },
+          {
+            "fieldName": "numero_processo",
+            "fieldValue": "={{ $json.body.numero_processo }}"
+          },
+          {
+            "fieldName": "incoterm",
+            "fieldValue": "={{ $json.body.incoterm || 'FOB' }}"
+          },
+          {
+            "fieldName": "valor_usd",
+            "fieldValue": "={{ $json.body.valor_usd }}"
+          },
+          {
+            "fieldName": "moeda",
+            "fieldValue": "={{ $json.body.moeda || 'USD' }}"
+          },
+          {
+            "fieldName": "prazo_dias",
+            "fieldValue": "={{ $json.body.prazo_dias || 90 }}"
+          },
+          {
+            "fieldName": "cdi_am",
+            "fieldValue": "={{ $json.body.cdi_am || 0.95 }}"
+          },
+          {
+            "fieldName": "data_vencimento",
+            "fieldValue": "={{ $json.body.data_vencimento }}"
+          },
+          {
+            "fieldName": "status",
+            "fieldValue": "={{ $json.body.status || 'pending' }}"
+          },
+          {
+            "fieldName": "descricao",
+            "fieldValue": "={{ $json.body.descricao || '' }}"
+          }
+        ]
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 1000],
+      "id": "create-process-node-id",
+      "credentials": {
+        "supabaseApi": {
+          "id": "TKWsZhgofbjVYFHg",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "node_name": "Supabase - Update Process",
+      "description": "Atualiza processo existente",
+      "parameters": {
+        "operation": "update",
+        "tableId": "processos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "options": {},
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "cliente_id",
+            "fieldValue": "={{ $json.body.cliente_id }}"
+          },
+          {
+            "fieldName": "numero_processo",
+            "fieldValue": "={{ $json.body.numero_processo }}"
+          },
+          {
+            "fieldName": "incoterm",
+            "fieldValue": "={{ $json.body.incoterm }}"
+          },
+          {
+            "fieldName": "valor_usd",
+            "fieldValue": "={{ $json.body.valor_usd }}"
+          },
+          {
+            "fieldName": "prazo_dias",
+            "fieldValue": "={{ $json.body.prazo_dias }}"
+          },
+          {
+            "fieldName": "cdi_am",
+            "fieldValue": "={{ $json.body.cdi_am }}"
+          },
+          {
+            "fieldName": "data_vencimento",
+            "fieldValue": "={{ $json.body.data_vencimento }}"
+          },
+          {
+            "fieldName": "status",
+            "fieldValue": "={{ $json.body.status }}"
+          },
+          {
+            "fieldName": "descricao",
+            "fieldValue": "={{ $json.body.descricao }}"
+          }
+        ]
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 1200],
+      "id": "update-process-node-id"
+    },
+    {
+      "node_name": "Supabase - Delete Process",
+      "description": "Deleta processo e registros relacionados",
+      "parameters": {
+        "operation": "delete",
+        "tableId": "processos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 1400],
+      "id": "delete-process-node-id"
+    },
+    {
+      "node_name": "Supabase - List All Clients",
+      "description": "Lista todos os clientes",
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "clientes",
+        "returnAll": true,
+        "options": {
+          "sort": [
+            {
+              "column": "nome",
+              "direction": "asc"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 1600],
+      "id": "list-clients-node-id"
+    },
+    {
+      "node_name": "Supabase - Get Client By ID",
+      "description": "Busca cliente específico por ID",
+      "parameters": {
+        "operation": "get",
+        "tableId": "clientes",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 1800],
+      "id": "get-client-node-id"
+    },
+    {
+      "node_name": "Supabase - Create Client",
+      "description": "Cria novo cliente",
+      "parameters": {
+        "operation": "create",
+        "tableId": "clientes",
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "nome",
+            "fieldValue": "={{ $json.body.nome }}"
+          },
+          {
+            "fieldName": "cnpj",
+            "fieldValue": "={{ $json.body.cnpj }}"
+          },
+          {
+            "fieldName": "email",
+            "fieldValue": "={{ $json.body.email }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 2000],
+      "id": "create-client-node-id"
+    },
+    {
+      "node_name": "Supabase - Update Client",
+      "description": "Atualiza cliente existente",
+      "parameters": {
+        "operation": "update",
+        "tableId": "clientes",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "nome",
+            "fieldValue": "={{ $json.body.nome }}"
+          },
+          {
+            "fieldName": "cnpj",
+            "fieldValue": "={{ $json.body.cnpj }}"
+          },
+          {
+            "fieldName": "email",
+            "fieldValue": "={{ $json.body.email }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 2200],
+      "id": "update-client-node-id"
+    },
+    {
+      "node_name": "Supabase - Delete Client",
+      "description": "Deleta cliente",
+      "parameters": {
+        "operation": "delete",
+        "tableId": "clientes",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 2400],
+      "id": "delete-client-node-id"
+    },
+    {
+      "node_name": "Supabase - List Payments By Process",
+      "description": "Lista pagamentos de um processo específico",
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "pagamentos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "processo_id",
+            "operator": "eq",
+            "value": "={{ $json.body.processo_id || $json.query.processo_id }}"
+          }
+        ],
+        "returnAll": true,
+        "options": {
+          "sort": [
+            {
+              "column": "data_vencimento",
+              "direction": "asc"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 2600],
+      "id": "list-payments-node-id"
+    },
+    {
+      "node_name": "Supabase - Create Payment",
+      "description": "Cria novo pagamento",
+      "parameters": {
+        "operation": "create",
+        "tableId": "pagamentos",
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "processo_id",
+            "fieldValue": "={{ $json.body.processo_id }}"
+          },
+          {
+            "fieldName": "tipo",
+            "fieldValue": "={{ $json.body.tipo }}"
+          },
+          {
+            "fieldName": "data_vencimento",
+            "fieldValue": "={{ $json.body.data_vencimento }}"
+          },
+          {
+            "fieldName": "valor_usd",
+            "fieldValue": "={{ $json.body.valor_usd }}"
+          },
+          {
+            "fieldName": "valor_brl",
+            "fieldValue": "={{ $json.body.valor_brl }}"
+          },
+          {
+            "fieldName": "pago",
+            "fieldValue": "={{ $json.body.pago || false }}"
+          },
+          {
+            "fieldName": "descricao",
+            "fieldValue": "={{ $json.body.descricao || '' }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 2800],
+      "id": "create-payment-node-id"
+    },
+    {
+      "node_name": "Supabase - Update Payment",
+      "description": "Atualiza pagamento existente",
+      "parameters": {
+        "operation": "update",
+        "tableId": "pagamentos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "tipo",
+            "fieldValue": "={{ $json.body.tipo }}"
+          },
+          {
+            "fieldName": "data_vencimento",
+            "fieldValue": "={{ $json.body.data_vencimento }}"
+          },
+          {
+            "fieldName": "valor_usd",
+            "fieldValue": "={{ $json.body.valor_usd }}"
+          },
+          {
+            "fieldName": "valor_brl",
+            "fieldValue": "={{ $json.body.valor_brl }}"
+          },
+          {
+            "fieldName": "pago",
+            "fieldValue": "={{ $json.body.pago }}"
+          },
+          {
+            "fieldName": "descricao",
+            "fieldValue": "={{ $json.body.descricao }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 3000],
+      "id": "update-payment-node-id"
+    },
+    {
+      "node_name": "Supabase - Delete Payment",
+      "description": "Deleta pagamento",
+      "parameters": {
+        "operation": "delete",
+        "tableId": "pagamentos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 3200],
+      "id": "delete-payment-node-id"
+    },
+    {
+      "node_name": "Supabase - List Taxas",
+      "description": "Lista taxas (últimos 30 dias ou data específica)",
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "taxas",
+        "returnAll": true,
+        "options": {
+          "sort": [
+            {
+              "column": "data",
+              "direction": "desc"
+            },
+            {
+              "column": "tipo",
+              "direction": "asc"
+            }
+          ],
+          "limit": 120
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 3400],
+      "id": "list-taxas-node-id",
+      "notes": "Retorna últimas 120 taxas (30 dias × 4 tipos)"
+    },
+    {
+      "node_name": "Code - Update Multiple Taxas",
+      "description": "Prepara batch update de taxas diárias",
+      "parameters": {
+        "jsCode": "// Recebe array de taxas do frontend\nconst inputData = $input.first().json;\nconst taxasArray = inputData.body?.taxas || [];\n\nif (!Array.isArray(taxasArray) || taxasArray.length === 0) {\n  throw new Error('Array de taxas não fornecido ou vazio');\n}\n\n// Retorna array de items para processar individualmente\nreturn taxasArray.map(taxa => ({\n  json: {\n    tipo: taxa.tipo,\n    valor: taxa.valor,\n    data: taxa.data || new Date().toISOString().split('T')[0]\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2560, 3600],
+      "id": "prepare-taxas-batch-id",
+      "notes": "IMPORTANTE: Code node recebe apenas 1 input"
+    },
+    {
+      "node_name": "Supabase - Upsert Taxa",
+      "description": "Insert ou update de uma taxa (upsert por tipo+data)",
+      "parameters": {
+        "operation": "upsert",
+        "tableId": "taxas",
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "tipo",
+            "fieldValue": "={{ $json.tipo }}"
+          },
+          {
+            "fieldName": "valor",
+            "fieldValue": "={{ $json.valor }}"
+          },
+          {
+            "fieldName": "data",
+            "fieldValue": "={{ $json.data }}"
+          }
+        ],
+        "options": {
+          "onConflict": "tipo,data"
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 3600],
+      "id": "upsert-taxa-node-id",
+      "notes": "Processa item por item do loop anterior"
+    },
+    {
+      "node_name": "Supabase - Get Faturamento By Process",
+      "description": "Busca faturamento de um processo",
+      "parameters": {
+        "operation": "get",
+        "tableId": "faturamento",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "processo_id",
+            "operator": "eq",
+            "value": "={{ $json.body.processo_id || $json.query.processo_id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 3800],
+      "id": "get-faturamento-node-id"
+    },
+    {
+      "node_name": "Supabase - Save Faturamento",
+      "description": "Cria ou atualiza faturamento (upsert)",
+      "parameters": {
+        "operation": "upsert",
+        "tableId": "faturamento",
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "processo_id",
+            "fieldValue": "={{ $json.body.processo_id }}"
+          },
+          {
+            "fieldName": "produto",
+            "fieldValue": "={{ $json.body.produto }}"
+          },
+          {
+            "fieldName": "quantidade_tn",
+            "fieldValue": "={{ $json.body.quantidade_tn }}"
+          },
+          {
+            "fieldName": "procedencia",
+            "fieldValue": "={{ $json.body.procedencia }}"
+          },
+          {
+            "fieldName": "ncm",
+            "fieldValue": "={{ $json.body.ncm }}"
+          },
+          {
+            "fieldName": "declaracao_importacao",
+            "fieldValue": "={{ $json.body.declaracao_importacao }}"
+          },
+          {
+            "fieldName": "fob_total_usd",
+            "fieldValue": "={{ $json.body.fob_total_usd }}"
+          },
+          {
+            "fieldName": "fob_unitario_usd",
+            "fieldValue": "={{ $json.body.fob_unitario_usd }}"
+          },
+          {
+            "fieldName": "frete_total_usd",
+            "fieldValue": "={{ $json.body.frete_total_usd }}"
+          },
+          {
+            "fieldName": "frete_unitario_usd",
+            "fieldValue": "={{ $json.body.frete_unitario_usd }}"
+          },
+          {
+            "fieldName": "seguro_total_usd",
+            "fieldValue": "={{ $json.body.seguro_total_usd }}"
+          },
+          {
+            "fieldName": "seguro_unitario_usd",
+            "fieldValue": "={{ $json.body.seguro_unitario_usd }}"
+          },
+          {
+            "fieldName": "valor_cif_usd",
+            "fieldValue": "={{ $json.body.valor_cif_usd }}"
+          },
+          {
+            "fieldName": "cif_unitario_usd",
+            "fieldValue": "={{ $json.body.cif_unitario_usd }}"
+          },
+          {
+            "fieldName": "valor_cif_brl",
+            "fieldValue": "={{ $json.body.valor_cif_brl }}"
+          },
+          {
+            "fieldName": "tx_spot_compra",
+            "fieldValue": "={{ $json.body.tx_spot_compra }}"
+          },
+          {
+            "fieldName": "tx_ptax_di",
+            "fieldValue": "={{ $json.body.tx_ptax_di }}"
+          },
+          {
+            "fieldName": "tx_futura_venc",
+            "fieldValue": "={{ $json.body.tx_futura_venc }}"
+          },
+          {
+            "fieldName": "taxa_dolar_fiscal",
+            "fieldValue": "={{ $json.body.taxa_dolar_fiscal }}"
+          },
+          {
+            "fieldName": "aliq_ii",
+            "fieldValue": "={{ $json.body.aliq_ii }}"
+          },
+          {
+            "fieldName": "aliq_ipi",
+            "fieldValue": "={{ $json.body.aliq_ipi }}"
+          },
+          {
+            "fieldName": "aliq_pis",
+            "fieldValue": "={{ $json.body.aliq_pis }}"
+          },
+          {
+            "fieldName": "aliq_cofins",
+            "fieldValue": "={{ $json.body.aliq_cofins }}"
+          },
+          {
+            "fieldName": "aliq_icms",
+            "fieldValue": "={{ $json.body.aliq_icms }}"
+          },
+          {
+            "fieldName": "valor_ii",
+            "fieldValue": "={{ $json.body.valor_ii }}"
+          },
+          {
+            "fieldName": "valor_ipi",
+            "fieldValue": "={{ $json.body.valor_ipi }}"
+          },
+          {
+            "fieldName": "valor_pis",
+            "fieldValue": "={{ $json.body.valor_pis }}"
+          },
+          {
+            "fieldName": "valor_cofins",
+            "fieldValue": "={{ $json.body.valor_cofins }}"
+          },
+          {
+            "fieldName": "valor_icms",
+            "fieldValue": "={{ $json.body.valor_icms }}"
+          },
+          {
+            "fieldName": "total_impostos",
+            "fieldValue": "={{ $json.body.total_impostos }}"
+          },
+          {
+            "fieldName": "credito_ipi",
+            "fieldValue": "={{ $json.body.credito_ipi }}"
+          },
+          {
+            "fieldName": "credito_pis",
+            "fieldValue": "={{ $json.body.credito_pis }}"
+          },
+          {
+            "fieldName": "credito_cofins",
+            "fieldValue": "={{ $json.body.credito_cofins }}"
+          },
+          {
+            "fieldName": "credito_icms",
+            "fieldValue": "={{ $json.body.credito_icms }}"
+          },
+          {
+            "fieldName": "total_creditos",
+            "fieldValue": "={{ $json.body.total_creditos }}"
+          },
+          {
+            "fieldName": "frete_nacional",
+            "fieldValue": "={{ $json.body.frete_nacional }}"
+          },
+          {
+            "fieldName": "desconto_comercial",
+            "fieldValue": "={{ $json.body.desconto_comercial }}"
+          },
+          {
+            "fieldName": "despachante_aduaneiro",
+            "fieldValue": "={{ $json.body.despachante_aduaneiro }}"
+          },
+          {
+            "fieldName": "emissao_di",
+            "fieldValue": "={{ $json.body.emissao_di }}"
+          },
+          {
+            "fieldName": "custo_desembaraco",
+            "fieldValue": "={{ $json.body.custo_desembaraco }}"
+          },
+          {
+            "fieldName": "despesas_diversas",
+            "fieldValue": "={{ $json.body.despesas_diversas }}"
+          },
+          {
+            "fieldName": "custo_comercializacao",
+            "fieldValue": "={{ $json.body.custo_comercializacao }}"
+          },
+          {
+            "fieldName": "total_despesas_operacionais",
+            "fieldValue": "={{ $json.body.total_despesas_operacionais }}"
+          }
+        ],
+        "options": {
+          "onConflict": "processo_id"
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 4000],
+      "id": "save-faturamento-node-id"
+    },
+    {
+      "node_name": "Supabase - List Cenarios By Process",
+      "description": "Lista cenários de um processo",
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "cenarios",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "processo_id",
+            "operator": "eq",
+            "value": "={{ $json.body.processo_id || $json.query.processo_id }}"
+          }
+        ],
+        "returnAll": true,
+        "options": {
+          "sort": [
+            {
+              "column": "criado_em",
+              "direction": "asc"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 4200],
+      "id": "list-cenarios-node-id"
+    },
+    {
+      "node_name": "Supabase - Create Cenario",
+      "description": "Cria novo cenário de cálculo",
+      "parameters": {
+        "operation": "create",
+        "tableId": "cenarios",
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "processo_id",
+            "fieldValue": "={{ $json.body.processo_id }}"
+          },
+          {
+            "fieldName": "nome",
+            "fieldValue": "={{ $json.body.nome }}"
+          },
+          {
+            "fieldName": "descricao",
+            "fieldValue": "={{ $json.body.descricao || '' }}"
+          },
+          {
+            "fieldName": "status",
+            "fieldValue": "={{ $json.body.status || 'active' }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 4400],
+      "id": "create-cenario-node-id"
+    },
+    {
+      "node_name": "Supabase - Delete Cenario",
+      "description": "Deleta cenário (arquiva ao invés de deletar fisicamente)",
+      "parameters": {
+        "operation": "update",
+        "tableId": "cenarios",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "id",
+            "operator": "eq",
+            "value": "={{ $json.body.id || $json.query.id }}"
+          }
+        ],
+        "dataMode": "defineBelow",
+        "fieldsToSend": [
+          {
+            "fieldName": "status",
+            "fieldValue": "archived"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 4600],
+      "id": "delete-cenario-node-id",
+      "notes": "Soft delete - apenas arquiva o cenário"
+    },
+    {
+      "node_name": "Supabase - List Movimentos By Cenario",
+      "description": "Lista movimentos de fluxo de caixa de um cenário",
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "movimentos",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "cenario_id",
+            "operator": "eq",
+            "value": "={{ $json.body.cenario_id || $json.query.cenario_id }}"
+          }
+        ],
+        "returnAll": true,
+        "options": {
+          "sort": [
+            {
+              "column": "data",
+              "direction": "asc"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 4800],
+      "id": "list-movimentos-node-id"
+    },
+    {
+      "node_name": "Code - Get Process Complete Data",
+      "description": "Busca processo com todos os dados relacionados usando queries separadas",
+      "parameters": {
+        "jsCode": "// IMPORTANTE: Code nodes recebem apenas 1 input\n// Esta abordagem usa o processId para fazer consultas Supabase separadas\n\nconst inputData = $input.first().json;\nconst processoId = inputData.body?.processo_id || inputData.query?.processo_id || inputData.processId;\n\nif (!processoId) {\n  throw new Error('processo_id é obrigatório');\n}\n\n// Retorna objeto para ser usado nas próximas queries Supabase\nreturn [{\n  json: {\n    processo_id: processoId,\n    // Estas informações serão usadas nos nós Supabase subsequentes\n    needsProcesso: true,\n    needsFaturamento: true,\n    needsCustos: true,\n    needsCenarios: true,\n    needsPagamentos: true\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2560, 5000],
+      "id": "prepare-complete-data-id",
+      "notes": "Prepara IDs para busca. Queries separadas ao invés de JOIN."
+    },
+    {
+      "node_name": "Supabase - Get Custos Financeiros",
+      "description": "Busca custos financeiros de um cenário",
+      "parameters": {
+        "operation": "get",
+        "tableId": "custos_financeiros",
+        "filterType": "manual",
+        "matchingColumns": [
+          {
+            "column": "cenario_id",
+            "operator": "eq",
+            "value": "={{ $json.body.cenario_id || $json.query.cenario_id }}"
+          }
+        ],
+        "options": {}
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2768, 5200],
+      "id": "get-custos-financeiros-node-id"
+    }
+  ],
+  
+  "connections_to_add": {
+    "Router": {
+      "main": [
+        [],
+        [],
+        [],
+        [],
+        [],
+        [{"node": "Supabase - Create Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - Update Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - Delete Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - List All Clients", "type": "main", "index": 0}],
+        [{"node": "Supabase - Get Client By ID", "type": "main", "index": 0}],
+        [{"node": "Supabase - Create Client", "type": "main", "index": 0}],
+        [{"node": "Supabase - Update Client", "type": "main", "index": 0}],
+        [{"node": "Supabase - Delete Client", "type": "main", "index": 0}],
+        [{"node": "Supabase - List Payments By Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - Create Payment", "type": "main", "index": 0}],
+        [{"node": "Supabase - Update Payment", "type": "main", "index": 0}],
+        [{"node": "Supabase - Delete Payment", "type": "main", "index": 0}],
+        [{"node": "Supabase - List Taxas", "type": "main", "index": 0}],
+        [{"node": "Code - Update Multiple Taxas", "type": "main", "index": 0}],
+        [{"node": "Supabase - Get Faturamento By Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - Save Faturamento", "type": "main", "index": 0}],
+        [{"node": "Supabase - List Cenarios By Process", "type": "main", "index": 0}],
+        [{"node": "Supabase - Create Cenario", "type": "main", "index": 0}],
+        [{"node": "Supabase - Delete Cenario", "type": "main", "index": 0}],
+        [{"node": "Supabase - List Movimentos By Cenario", "type": "main", "index": 0}]
+      ]
+    },
+    "Code - Update Multiple Taxas": {
+      "main": [
+        [{"node": "Supabase - Upsert Taxa", "type": "main", "index": 0}]
+      ]
+    }
+  },
+  
+  "api_endpoint_reference": {
+    "processes": {
+      "list": "GET ?endpoint=processes",
+      "get": "GET ?endpoint=getById&id=1",
+      "create": "POST ?endpoint=createProcess {body: {...}}",
+      "update": "POST ?endpoint=updateProcess {body: {id: 1, ...}}",
+      "delete": "POST ?endpoint=deleteProcess {body: {id: 1}}"
+    },
+    "clients": {
+      "list": "GET ?endpoint=clients",
+      "get": "GET ?endpoint=getClient&id=1",
+      "create": "POST ?endpoint=createClient {body: {nome, cnpj, email}}",
+      "update": "POST ?endpoint=updateClient {body: {id: 1, ...}}",
+      "delete": "POST ?endpoint=deleteClient {body: {id: 1}}"
+    },
+    "payments": {
+      "list": "GET ?endpoint=payments&processo_id=1",
+      "create": "POST ?endpoint=createPayment {body: {...}}",
+      "update": "POST ?endpoint=updatePayment {body: {id: 1, ...}}",
+      "delete": "POST ?endpoint=deletePayment {body: {id: 1}}"
+    },
+    "taxas": {
+      "list": "GET ?endpoint=taxas",
+      "update": "POST ?endpoint=updateTaxas {body: {taxas: [{tipo, valor, data}, ...]}}",
+      "note": "Batch update de múltiplas taxas"
+    },
+    "faturamento": {
+      "get": "GET ?endpoint=faturamento&processo_id=1",
+      "save": "POST ?endpoint=saveFaturamento {body: {processo_id: 1, ...42 campos...}}",
+      "note": "Save faz upsert automaticamente"
+    },
+    "cenarios": {
+      "list": "GET ?endpoint=cenarios&processo_id=1",
+      "create": "POST ?endpoint=createCenario {body: {processo_id, nome, descricao}}",
+      "delete": "POST ?endpoint=deleteCenario {body: {id: 1}}"
+    },
+    "movimentos": {
+      "list": "GET ?endpoint=movimentos&cenario_id=1"
+    },
+    "calculate": {
+      "execute": "POST ?endpoint=calculate {body: {...42 campos...}}",
+      "note": "Retorna objeto completo com todos os cálculos"
+    }
+  },
+  
+  "important_notes": [
+    "CRÍTICO: Code nodes no n8n recebem apenas 1 input por vez",
+    "NUNCA use Merge antes de Code nodes - eles não processam múltiplos inputs",
+    "Use queries Supabase com filters ao invés de JOINs",
+    "Para buscar dados relacionados, faça queries sequenciais usando o ID",
+    "Taxas usa batch update - 1 Code node gera array, depois loop com Supabase",
+    "Faturamento tem 42 campos - todos mapeados no Save node",
+    "Cenários: delete é soft (status = 'archived'), não físico",
+    "Payments sempre filtrados por processo_id",
+    "Movimentos sempre filtrados por cenario_id",
+    "Custos Financeiros sempre filtrados por cenario_id"
+  ],
+  
+  "testing_curl_examples": {
+    "create_process": "curl -X POST 'https://seu-n8n.app.cloud/webhook/finance-calculator?endpoint=createProcess' -H 'Content-Type: application/json' -d '{\"cliente_id\": 1, \"numero_processo\": \"2024-011-IMP\", \"valor_usd\": 600000, \"prazo_dias\": 90, \"data_vencimento\": \"2025-02-15\"}'",
+    "list_clients": "curl 'https://seu-n8n.app.cloud/webhook/finance-calculator?endpoint=clients'",
+    "update_taxas": "curl -X POST 'https://seu-n8n.app.cloud/webhook/finance-calculator?endpoint=updateTaxas' -H 'Content-Type: application/json' -d '{\"taxas\": [{\"tipo\": \"CDI Mensal\", \"valor\": 0.98, \"data\": \"2025-01-15\"}, {\"tipo\": \"PTAX D-1\", \"valor\": 5.15, \"data\": \"2025-01-15\"}]}'",
+    "save_faturamento": "curl -X POST 'https://seu-n8n.app.cloud/webhook/finance-calculator?endpoint=saveFaturamento' -H 'Content-Type: application/json' -d '{\"processo_id\": 1, \"produto\": \"Soja\", \"quantidade_tn\": 1000, \"fob_total_usd\": 500000, ...}'",
+    "list_cenarios": "curl 'https://seu-n8n.app.cloud/webhook/finance-calculator?endpoint=cenarios&processo_id=1'"
+  }
+}

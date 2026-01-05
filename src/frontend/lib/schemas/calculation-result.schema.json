@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CalculationResult",
+  "type": "object",
+  "required": ["processoId","summary","movimentos"],
+  "properties": {
+    "processoId": { "type": ["string","integer"] },
+    "clienteId": { "type": ["string","integer"] },
+    "custosUSD": { "type": "object", "additionalProperties": true },
+    "cambio": { "type": "object", "additionalProperties": true },
+    "impostos": { "type": "object", "additionalProperties": true },
+    "despesas": { "type": "object", "additionalProperties": true },
+    "encargos": { "type": "object", "additionalProperties": true },
+    "custos": { "type": "object", "additionalProperties": true },
+    "precos": { "type": "object", "additionalProperties": true },
+    "movimentos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "data": { "type": "string", "format": "date" },
+          "historico": { "type": "string" },
+          "diasCorridos": { "type": "number" },
+          "txSpot": { "type": "number" },
+          "valorUSD": { "type": "number" },
+          "encargos": { "type": "number" },
+          "total": { "type": "number" }
+        },
+        "required": ["data","total"]
+      }
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "numeroMovimentos": { "type": "number" },
+        "totalDesembolso": { "type": "number" },
+        "calculadoEm": { "type": "string", "format": "date-time" }
+      },
+      "required": ["numeroMovimentos","totalDesembolso","calculadoEm"]
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,245 @@
+"use client"
+
+import { useState } from "react"
+import {
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  Clock,
+  Settings,
+  LogOut,
+  Menu,
+  Search,
+  ListIcon,
+  CheckCircle2,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+
+export default function Home() {
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sortBy, setSortBy] = useState("Mais recente")
+
+  const stats = [
+    { label: "Todas as notas", value: 7, icon: ListIcon },
+    { label: "Notas finalizadas", value: 1, icon: CheckCircle2 },
+    { label: "Notas pendentes", value: 6, icon: ListIcon, highlighted: true },
+  ]
+
+  const notes = [
+    {
+      id: 1,
+      identification: "2025-11-03T08:01:04.06",
+      start: "2025-11-03T08:01:11.888",
+      writing: "2025-11-02T08:12:46.206",
+      status: "Pendente",
+      details: "Dois ou mais CNPJs cadastrados",
+      attempts: 1,
+    },
+    {
+      id: 2,
+      identification: "2025-11-02T08:12:14.237",
+      start: "2025-11-02T08:12:14.237",
+      writing: "2025-11-02T08:20:384",
+      status: "Pendente",
+      details: "CNPJ não encontrado",
+      attempts: 1,
+    },
+    {
+      id: 3,
+      identification: "2025-11-02T08:00:58.296",
+      start: "2025-11-03T10:52:10.847",
+      writing: "2025-11-02T08:12:46.206",
+      status: "Pendente",
+      details: "Não se encontrou nenhuma nota finalizada para esse Fornecedor e Serviço",
+      attempts: 4,
+    },
+    {
+      id: 4,
+      identification: "2025-11-02T08:00:56.912",
+      start: "2025-11-02T17:28:08.822",
+      writing: "2025-11-02T08:12:46.206",
+      status: "Pendente",
+      details: "JSON parameter needs to be valid JSON",
+      attempts: 3,
+    },
+    {
+      id: 5,
+      identification: "2025-11-02T08:00:55.646",
+      start: "2025-11-02T08:03:09.86",
+      writing: "2025-11-02T08:12:46.206",
+      status: "Pendente",
+      details: "Não foi possível encontrar uma configuração de documento",
+      attempts: 1,
+    },
+    {
+      id: 6,
+      identification: "2025-11-03T08:01:04.06",
+      start: "2025-11-03T08:01:11.888",
+      writing: "2025-11-02T08:12:46.206",
+      status: "Pendente",
+      details: "Dois ou mais CNPJs cadastrados",
+      attempts: 1,
+    },
+  ]
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <div
+        className="fixed top-0 left-0 right-0 z-20"
+        style={{ background: "linear-gradient(90deg, #0072bc 69%, #070f26 89%)" }}
+      >
+        <div className="flex items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1 hover:bg-blue-600 rounded transition">
+              <Menu size={24} className="text-white" />
+            </button>
+            <div className="flex items-center gap-2">
+            <img src="http://212.85.22.104:3000/api-public/logo/1/logo.bmp" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex pt-20">
+        {/* Sidebar */}
+        <div
+          className={`${
+            sidebarOpen ? "w-56" : "w-0"
+          } transition-all duration-300 bg-white border-r border-gray-200 overflow-hidden fixed left-0 top-20 bottom-0 z-10 flex flex-col`}
+        >
+          <div className="p-4 flex-1">
+            <button className="w-full bg-[#337ab7] text-white font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4">
+              <FileText size={18} />
+              Notas fiscais
+            </button>
+            <nav className="space-y-2">
+              <button className="w-full text-left px-4 py-2.5 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2">
+                <Clock size={18} />
+                Histórico
+              </button>
+              <button className="w-full text-left px-4 py-2.5 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2">
+                <Settings size={18} />
+                Configurações
+              </button>
+            </nav>
+          </div>
+          <button className="px-4 py-2.5 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2 border-t border-gray-200 w-full">
+            <LogOut size={18} />
+            Fazer logout
+          </button>
+        </div>
+
+        {/* Main Content */}
+        <div className={`${sidebarOpen ? "ml-56" : "ml-0"} flex-1 transition-all duration-300`}>
+          <div className="p-8">
+            <h2 className="text-3xl font-bold text-gray-900 mb-8">Panorama geral</h2>
+
+            {/* Stats Cards */}
+            <div className="grid grid-cols-3 gap-4 mb-8">
+              {stats.map((stat, idx) => {
+                const IconComponent = stat.icon
+                return (
+                  <div
+                    key={idx}
+                    className={`p-6 rounded-xl ${
+                      stat.highlighted ? "bg-[#337ab7] text-white" : "bg-white text-gray-900 border border-gray-200"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <IconComponent size={24} className={stat.highlighted ? "text-white" : "text-gray-700"} />
+                      <div>
+                        <div className="text-3xl font-bold">{stat.value}</div>
+                        <div className={stat.highlighted ? "text-blue-100" : "text-gray-600"}>{stat.label}</div>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Notas Fiscais Section */}
+            <div>
+              <h3 className="text-xl font-bold text-gray-900 mb-4">Notas fiscais</h3>
+
+              {/* Search and Filter */}
+              <div className="flex items-center justify-between gap-4 mb-6">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-2.5 text-gray-400" size={18} />
+                  <Input placeholder="Pesquisar por fornecedor" className="pl-10 h-10" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600 text-sm">Ordenar por:</span>
+                  <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+                    <option>Mais recente</option>
+                    <option>Mais antigo</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Table */}
+              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-gray-200 bg-gray-50">
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Data de Identificação</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">
+                        Data Início Processamento
+                      </th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Data de Escrituração</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Status</th>
+                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Detalhes</th>
+                      <th className="px-6 py-3 text-center text-sm font-semibold text-gray-700">Tentativas</th>
+                      <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notes.map((note) => (
+                      <tr key={note.id} className="border-b border-gray-200 hover:bg-gray-50">
+                        <td className="px-6 py-4 text-sm text-gray-900">{note.identification}</td>
+                        <td className="px-6 py-4 text-sm text-gray-900">{note.start}</td>
+                        <td className="px-6 py-4 text-sm text-gray-900">{note.writing}</td>
+                        <td className="px-6 py-4 text-sm">
+                          <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-xs font-medium">
+                            {note.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">{note.details}</td>
+                        <td className="px-6 py-4 text-sm text-center text-gray-900">{note.attempts}</td>
+                        <td className="px-6 py-4 text-sm text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-[#337ab7] border-[#337ab7] hover:bg-blue-50 bg-transparent"
+                            >
+                              Acessar PDF
+                            </Button>
+                            <Button size="sm" className="bg-[#337ab7] hover:bg-blue-800 text-white">
+                              Reprocessar
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              <div className="flex items-center justify-between mt-6">
+                <button className="p-2 hover:bg-gray-200 rounded disabled:opacity-50">
+                  <ChevronLeft size={20} className="text-gray-600" />
+                </button>
+                <div className="h-2 flex-1 mx-4 bg-gray-300 rounded-full"></div>
+                <button className="p-2 hover:bg-gray-200 rounded">
+                  <ChevronRight size={20} className="text-gray-600" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

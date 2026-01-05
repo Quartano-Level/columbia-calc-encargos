@@ -1,0 +1,15 @@
+{
+        "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/._*": true,
+      "**/*.md": true
+    },
+    "files.exclude": {
+      "**/._*": true
+    },
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/._*": true
+    },
+}
