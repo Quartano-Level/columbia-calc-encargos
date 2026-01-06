@@ -1,6 +1,7 @@
 import { CalculationResult, CalculationInput, Payment } from '../types/index.js';
 import { CalculationResultSchema } from '../types/schemas.js';
 import { conexosService } from './conexos.js';
+import { cdiCalculatorService } from './cdi-calculator.js';
 import { saveCalculation, getCalculationById } from './supabase.js';
 import { calculationInputHash, logEvent, boxLog } from '../utils/index.js';
 
@@ -63,17 +64,79 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
 
   boxLog('Processed Movimentos', movimentos);
 
+  // 3. Buscar Títulos e Baixas (psq015) para Juros Perdidos (Atraso)
+  const financialTitles = await conexosService.getFinancialTitlesPsq015(Number(processoId));
+
+  const enrichedPayments = await Promise.all(financialTitles.map(async (title: any) => {
+    const discharges = await conexosService.getTitleDischargesPsq015(title);
+
+    // Cada título pode ter múltiplas baixas
+    const processedDischarges = await Promise.all(discharges.map(async (bxa: any) => {
+      const dueDate = toDateIso(title.titDtaVencimento);
+      const paymentDate = toDateIso(bxa.borDtaMvto || bxa.bxaDtaBaixa);
+      const principal = Number(bxa.bxaMnyValor || 0);
+
+      let lostInterest = 0;
+      let lateDays = 0;
+      let factor = 1;
+
+      if (principal > 0 && paymentDate > dueDate) {
+        const result = await cdiCalculatorService.calculateLostInterest(principal, dueDate, paymentDate);
+        lostInterest = result.lostInterest;
+        lateDays = result.days;
+        factor = result.accumulatedFactor;
+      }
+
+      return {
+        ...bxa,
+        dueDate,
+        paymentDate,
+        lostInterest,
+        lateDays,
+        accumulatedFactor: factor,
+        principal
+      };
+    }));
+
+    const titleLostInterest = processedDischarges.reduce((acc, d) => acc + d.lostInterest, 0);
+
+    if (titleLostInterest > 0 && title.priCod === 82) {
+      console.log(`[Calculation DEBUG 82] Juros Perdidos detectados no título ${title.titEspNumero || title.docCod}: R$ ${titleLostInterest.toFixed(2)}`);
+    }
+
+    return {
+      ...title,
+      discharges: processedDischarges,
+      lostInterest: titleLostInterest,
+      dueDate: toDateIso(title.titDtaVencimento),
+      // Para retrocompatibilidade no front se necessário:
+      paymentDate: processedDischarges.length > 0 ? processedDischarges[0].paymentDate : null,
+      lateDays: processedDischarges.reduce((acc, d) => acc + d.lateDays, 0)
+    };
+  }));
+
+  const totalLostInterest = enrichedPayments.reduce((acc, p) => acc + (p.lostInterest || 0), 0);
   const totalInterest = movimentos.reduce((acc: number, m: any) => acc + m.encargos, 0);
   const totalDisburse = movimentos.reduce((acc: number, m: any) => acc + m.valorUSD, 0);
 
-  // Mapear despesas
+  // Mapear despesas (considerando campos do Conexos vindos de imp021)
   const despesasMap = Array.isArray(despesas)
     ? despesas.map((d: any) => ({
-      tipo: d.tipo || '',
-      descricao: d.descricao || '',
-      valor: Number(d.valor) || 0,
+      tipo: d.ctpDesNome || d.tipo || '',
+      descricao: d.impDesNome || d.descricao || '',
+      valor: Number(d.pidMnyValormn || d.valor || 0),
     }))
     : [];
+
+  console.log(`[orchestrateCalculation] Despesas mapped:`, despesasMap.length);
+
+  // Verificar se já existe lançamento de "ENCARGOS FINANCEIROS"
+  const hasExistingInterest = despesasMap.some(d =>
+    (d.descricao || '').toUpperCase().includes('ENCARGOS FINANCEIROS') ||
+    (d.tipo || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
+  );
+
+  console.log(`[orchestrateCalculation] hasExistingInterest:`, hasExistingInterest);
 
   const result: CalculationResult = {
     processId: processoId,
@@ -108,11 +171,10 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     },
     totalDisburse: totalDisburse,
     totalInterest: totalInterest,
+    totalLostInterest: totalLostInterest,
     totalCharges: totalDisburse + totalInterest,
-    payments: rawSource.map((p: any, idx: number) => ({
-      ...p,
-      calculatedInterest: movimentos[idx].encargos
-    })),
+    hasExistingInterest: hasExistingInterest,
+    payments: enrichedPayments,
   };
 
   boxLog('Calculation Final Result', result);

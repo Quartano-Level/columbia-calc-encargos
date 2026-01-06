@@ -161,9 +161,7 @@ class ConexosService {
     };
     const url = '/imp059/list';
     try {
-      // this.logRequest('getContracts', 'POST', url, body);
       const resp = await this.client.post(url, body, { headers });
-      // this.logRequest('getContracts', 'POST', url, body, { status: resp.status, data: resp.data });
       return resp.data?.rows || [];
     } catch (err: any) {
       // this.logRequest('getContracts', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
@@ -202,9 +200,7 @@ class ConexosService {
 
     const url = '/imp059/list';
     try {
-      // this.logRequest('getContractsByProcess', 'POST', url, body);
       const resp = await this.client.post(url, body, { headers });
-      // this.logRequest('getContractsByProcess', 'POST', url, body, { status: resp.status, data: resp.data });
       return resp.data?.rows || [];
     } catch (err: any) {
       // this.logRequest('getContractsByProcess', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
@@ -443,16 +439,33 @@ class ConexosService {
       'accept': 'application/json, text/plain, */*',
     };
 
+    const url = `/imp021/DespesasProcesso/${processId}`;
+    console.log(`[Conexos] Fetching expenses: GET ${url}`);
+
     try {
-      const resp = await this.client.post(`/imp021/DespesasProcesso/${processId}`, body, { headers });
-      return resp.data;
+      // Tentar GET conforme o exemplo de CURL do usuário
+      const resp = await this.client.get(url, { headers });
+      console.log(`[Conexos] GET ${url} Success. Data type:`, typeof resp.data, Array.isArray(resp.data) ? 'Array' : 'Object');
+      const data = resp.data?.rows || resp.data;
+      console.log(`[Conexos] Expenses found:`, Array.isArray(data) ? data.length : (data ? 1 : 0));
+      return data;
     } catch (err: any) {
+      console.error(`[Conexos] GET ${url} failed:`, err.message);
       if (err.response && err.response.status === 401) {
         await this.login();
-        const retryResp = await this.client.post(`/imp021/DespesasProcesso/${processId}`, body, { headers });
-        return retryResp.data;
+        const retryResp = await this.client.get(url, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || retryResp.data;
       }
-      throw err;
+
+      // Se GET falhar, tentar POST como fallback (algumas rotas aceitam ambos com semânticas diferentes)
+      console.log(`[Conexos] Trying POST fallback for expenses...`);
+      try {
+        const resp = await this.client.post(url, body, { headers });
+        return resp.data?.rows || resp.data;
+      } catch (postErr: any) {
+        console.error(`[Conexos] POST fallback also failed:`, postErr.message);
+        throw postErr;
+      }
     }
   }
 
@@ -748,6 +761,9 @@ class ConexosService {
       // Busca títulos financeiros (psq015) - para obter dados de pagamento"
       const financialTitles = await this.getFinancialTitlesPsq015(priCod);
 
+      // Busca despesas já lançadas no Conexos
+      const despesas = await this.getDespesasByProcessId(String(priCod));
+
       // Busca invCod via log009/parcelas/list (psq015 não retorna invCod)
       const invCod = await this.getInvoiceCodeLog009(priCod);
 
@@ -781,58 +797,64 @@ class ConexosService {
         const allDischarges = paymentsList.flatMap(t => t.discharges || []);
 
         if (allDischarges.length > 0) {
-          // Ordenar por data (preferencia borDtaMvto, depois bxaDtaBaixa)
+          // Ordenar por data DESCENDENTE (pegar a última baixa como data de liquidação real)
           allDischarges.sort((a: any, b: any) => {
             const dateA = a.borDtaMvto || a.bxaDtaBaixa || 0;
             const dateB = b.borDtaMvto || b.bxaDtaBaixa || 0;
             const dA = typeof dateA === 'string' ? new Date(dateA).getTime() : (dateA || 0);
             const dB = typeof dateB === 'string' ? new Date(dateB).getTime() : (dateB || 0);
-            return dA - dB;
+            return dB - dA; // DESC
           });
 
-          const firstDischarge = allDischarges[0];
-          const finalDate = firstDischarge.borDtaMvto || firstDischarge.bxaDtaBaixa;
+          const lastDischarge = allDischarges[0];
+          const finalDate = lastDischarge.borDtaMvto || lastDischarge.bxaDtaBaixa;
 
           paymentInfo = {
             status: 'Pago',
             date: finalDate,
-            amount: firstDischarge.bxaMnyValor,
-            details: firstDischarge
-          };
-        } else if (paymentsList.length > 0) {
-          paymentInfo = {
-            status: 'Aberto',
-            date: null,
-            nextDueDate: paymentsList[0].titDtaVencimento
+            amount: lastDischarge.bxaMnyValor,
+            details: lastDischarge
           };
         }
-      } else {
-        paymentInfo = { status: 'Sem titulos' };
       }
 
-      // Se ainda não temos data de pagamento das baixas, verificar no contrato (borDtaMvto)
-      if ((!paymentInfo || !paymentInfo.date) && relatedContracts.length > 0) {
-        const contract = relatedContracts[0];
-        if (contract.borDtaMvto) {
-          // Se achamos data de movimento no contrato, assumimos que foi pago/liquidado
-          paymentInfo = {
-            status: 'Pago',
-            date: contract.borDtaMvto,
-            amount: paymentInfo?.amount,
-            details: contract
-          };
+      // Enriquecer cada contrato com dados reais de juros/baixa se disponíveis
+      const enrichedContracts = relatedContracts.map((c: any) => {
+        // Tentar encontrar o título correspondente (muitas vezes docCod do psq015 = imcCod do imp059)
+        const correspondingTitle = paymentsList.find(t =>
+          String(t.docCod) === String(c.imcCod) ||
+          String(t.titCod) === String(c.imcCod) // fallback de busca por código
+        );
+
+        let realPaymentDate = null;
+        if (correspondingTitle && correspondingTitle.discharges && correspondingTitle.discharges.length > 0) {
+          // Pegar a data da última baixa ou da principal
+          const lastBxa = [...correspondingTitle.discharges].sort((a, b) =>
+            new Date(b.borDtaMvto || 0).getTime() - new Date(a.borDtaMvto || 0).getTime()
+          )[0];
+          realPaymentDate = lastBxa?.borDtaMvto || null;
         }
-      }
+
+        return {
+          ...c,
+          // Prioridade para o que veio do psq015 (títulos financeiros)
+          titDtaVencimento: correspondingTitle?.titDtaVencimento || null,
+          borDtaMvto: realPaymentDate || null // Removendo fallback do cabeçalho do contrato se não houver baixa real
+        };
+      });
 
       return {
         ...proc,
-        // Sobrescrevendo/Enriquecendo campos
         clientName: detailedData?.dpeNomPessoaCons || detailedData?.dpeNomPessoa || proc.dpeNomPessoa,
         incoterm: detailedData?.incEspSigla,
-
-        contracts: relatedContracts,
-        payments: paymentsList, // Lista completa com baixas
-        paymentInfo, // Status resumido
+        contracts: enrichedContracts,
+        payments: paymentsList,
+        paymentInfo,
+        expenses: Array.isArray(despesas) ? despesas : (despesas?.rows || []),
+        hasExistingInterest: Array.isArray(despesas) ? despesas.some((d: any) =>
+          (d.impDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS') ||
+          (d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
+        ) : false,
 
         // Dados resumidos do contrato para tabela
         contractData: relatedContracts.length > 0 ? {
@@ -879,9 +901,7 @@ class ConexosService {
     };
 
     try {
-      // this.logRequest('getInvoiceCodeLog009', 'POST', url, body);
       const resp = await this.client.post(url, body, { headers });
-      // this.logRequest('getInvoiceCodeLog009', 'POST', url, body, { status: resp.status, data: resp.data });
       if (resp.data && resp.data.rows && resp.data.rows.length > 0) {
         const code = resp.data.rows[0].invCod;
         // console.log(`[getInvoiceCodeLog009] priCod=${priCod} -> invCod=${code}`);
@@ -918,9 +938,7 @@ class ConexosService {
 
     const url = `/log009/${invCod}`;
     try {
-      // this.logRequest('getProcessDetailsLog009', 'GET', url);
       const resp = await this.client.get(url, { headers });
-      // this.logRequest('getProcessDetailsLog009', 'GET', url, undefined, { status: resp.status, data: resp.data });
       return resp.data;
     } catch (err: any) {
       // this.logRequest('getProcessDetailsLog009', 'GET', url, undefined, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
@@ -940,19 +958,27 @@ class ConexosService {
     await this.ensureSid();
 
     const body = {
-      fieldList: ["filCod", "priCod", "titDtaVencimento", "docCod", "titCod", "docTip", "docVldTipoFisFin"],
+      fieldList: [
+        "filCod", "priCod", "priEspRefcliente", "docCod", "titDtaVencimento", "pesCod",
+        "dpeNomPessoa", "ungDesNome", "titMnyValor", "titMnyJuros", "titMnyDesconto",
+        "mnyLiquido", "mnyTaxas", "bxaMnyValor", "bxaMnyRetido", "bxaMnyLiquido",
+        "vlrJurosProj", "vlrMultaProj", "mnyAberto", "mnyAbertoAgrup", "docMnyValor",
+        "titEspNumero", "docDtaEmissao", "titCod", "docEspNumero", "dplDesNome",
+        "docVldTipoAdto", "tpdDesNome", "docTip", "docVldTipoFisFin"
+      ],
       filterList: {
         "fExibirRenegociados#EQ": "0",
         "fExibirAgrupados#EQ": "0",
         "fPriCod#EQ": priCod,
-        "vldSituacao#IN": ["1"],
+        "vldSituacao#IN": ["1", "2"],
         "docVldPrevisao#EQ": "0",
         "filCod#IN": [2]
       },
       pageNumber: 1,
-      pageSize: "20",
-      orderList: { orderList: [{ propertyName: "filCod", order: "asc" }] },
-      serviceName: "psq015"
+      pageSize: "50",
+      dtoParam: {},
+      serviceName: "psq015",
+      orderList: { orderList: [{ propertyName: "filCod", order: "asc" }] }
     };
 
     const headers = {
@@ -966,10 +992,15 @@ class ConexosService {
 
     const url = '/psq015/list';
     try {
-      // this.logRequest('getFinancialTitlesPsq015', 'POST', url, body);
       const resp = await this.client.post(url, body, { headers });
-      // this.logRequest('getFinancialTitlesPsq015', 'POST', url, body, { status: resp.status, data: resp.data });
-      return resp.data?.rows || [];
+      const rows = resp.data?.rows || [];
+      if (priCod === 82) {
+        console.log(`[DEBUG 82] psq015: ${rows.length} títulos encontrados`);
+        rows.forEach((r: any, i: number) => {
+          console.log(`[DEBUG 82] Título ${i + 1}: titCod=${r.titCod}, docCod=${r.docCod}, vencimento=${r.titDtaVencimento}, numero=${r.titEspNumero}`);
+        });
+      }
+      return rows;
     } catch (err: any) {
       // this.logRequest('getFinancialTitlesPsq015', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
       if (err.response && err.response.status === 401) {
@@ -982,17 +1013,22 @@ class ConexosService {
   }
 
   async getTitleDischargesPsq015(title: any) {
-    // Nova URL sugerida: /psq015/{filCod}/{docTip}/{docCod}/{titCod}
-
     if (!title || !title.filCod || !title.docCod || !title.titCod) return [];
 
     await this.ensureSid();
 
     const docTip = title.docTip ?? 1;
+    // URL: /api/psq015/baixasTitulo/list/{filCod}/{docTip}/{docCod}/{titCod}/{vldCheck}
+    // vldCheck é sempre 0 conforme instrução do usuário
+    const url = `/psq015/baixasTitulo/list/${title.filCod}/${docTip}/${title.docCod}/${title.titCod}/0`;
 
-    // Construção da URL conforme schema do usuário
-    // Atenção: baseURL já inclui /api geralmente, mas se o usuário disse /api/psq015, e nossa base for .../api, fica /psq015 só.
-    const url = `/psq015/${title.filCod}/${docTip}/${title.docCod}/${title.titCod}`;
+    const body = {
+      fieldList: [],
+      filterList: { "borVldFinalizado#IN": [1] },
+      pageNumber: 1,
+      pageSize: 100,
+      orderList: { orderList: [{ propertyName: "borCod", order: "asc" }] }
+    };
 
     const headers = {
       ...this.getAuthHeaders(),
@@ -1004,35 +1040,27 @@ class ConexosService {
     };
 
     try {
-      // this.logRequest('getTitleDischargesPsq015', 'GET', url);
-      const resp = await this.client.get(url, { headers });
-      // this.logRequest('getTitleDischargesPsq015', 'GET', url, undefined, { status: resp.status, data: resp.data });
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || (Array.isArray(resp.data) ? resp.data : []);
 
-      // Se retornar array, é a lista de baixas ou detalhes
-      if (Array.isArray(resp.data)) return resp.data;
-      if (resp.data && Array.isArray(resp.data.rows)) return resp.data.rows;
-
-      // Se retornou um objeto, encapsula em array
-      if (resp.data) {
-        return [resp.data];
+      // Log específico para priCod 82 se conseguirmos identificar o priCod (passado no title)
+      if (title.priCod === 82) {
+        console.log(`[DEBUG 82] baixasTitulo para titCod ${title.titCod}: ${rows.length} baixas`);
+        rows.forEach((r: any, i: number) => {
+          console.log(`[DEBUG 82] Baixa ${i + 1}: borCod=${r.borCod}, borDtaMvto=${r.borDtaMvto}, valor=${r.bxaMnyValor}`);
+        });
       }
-
-      return [];
+      return rows;
     } catch (err: any) {
-      // Erro 500 ou 404 - silencioso (dados podem não existir)
       if (err.response && (err.response.status === 500 || err.response.status === 404)) {
         return [];
       }
 
-      // this.logRequest('getTitleDischargesPsq015', 'GET', url, undefined, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
       if (err.response && err.response.status === 401) {
         await this.login();
         try {
-          const retryResp = await this.client.get(url, { headers: { ...headers, ...this.getAuthHeaders() } });
-          const data = retryResp.data;
-          if (Array.isArray(data)) return data;
-          if (data && Array.isArray(data.rows)) return data.rows;
-          return data ? [data] : [];
+          const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+          return retryResp.data?.rows || (Array.isArray(retryResp.data) ? retryResp.data : []);
         } catch (retryErr: any) {
           return [];
         }
