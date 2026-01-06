@@ -337,6 +337,8 @@ export default function ProcessCalculatorPage() {
 					totalDisburse: Number(calculationResult.totalDisburse) || 0,
 					totalInterest: Number(calculationResult.totalInterest) || 0,
 					totalCharges: Number(calculationResult.totalCharges) || 0,
+					totalLostInterest: Number(calculationResult.totalLostInterest) || 0,
+					hasExistingInterest: !!calculationResult.hasExistingInterest,
 					payments: (calculationResult.payments || []).map((p: any) => ({
 						...p,
 						value: Number(p.value) || 0,
@@ -346,6 +348,7 @@ export default function ProcessCalculatorPage() {
 				calculationResult = validatedResult;
 			}
 
+			console.log("Calculation results being set in state:", calculationResult);
 			setResult(calculationResult);
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to calculate");
@@ -1101,6 +1104,46 @@ export default function ProcessCalculatorPage() {
 								"Calcular Encargos Financeiros"
 							)}
 						</Button>
+
+						{/* SEÇÃO 3.1: DESPESAS EXISTENTES NO CONEXOS */}
+						{process && process.expenses && process.expenses.length > 0 && (
+							<div className="mt-8 border-t pt-6">
+								<div className="flex items-center gap-2 mb-4">
+									<svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+									</svg>
+									<h3 className="text-md font-semibold text-gray-800">Despesas atuais no Conexos</h3>
+								</div>
+								<div className="overflow-x-auto rounded-md border border-gray-200">
+									<table className="w-full text-sm">
+										<thead className="bg-gray-50 text-gray-500">
+											<tr>
+												<th className="px-3 py-2 text-left font-medium">Tipo</th>
+												<th className="px-3 py-2 text-left font-medium">Histórico</th>
+												<th className="px-3 py-2 text-right font-medium">Valor (BRL)</th>
+											</tr>
+										</thead>
+										<tbody className="divide-y divide-gray-100 italic">
+											{process.expenses.map((d: any, i: number) => {
+												const isFinancial = (d.impDesNome || d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS');
+												return (
+													<tr key={i} className={isFinancial ? "bg-yellow-50/50" : ""}>
+														<td className="px-3 py-2 text-gray-600">{d.ctpDesNome || d.tipo || '—'}</td>
+														<td className="px-3 py-2 text-gray-800 font-medium">
+															{d.impDesNome || d.descricao || '—'}
+															{isFinancial && <span className="ml-2 text-[10px] bg-yellow-100 text-yellow-700 px-1 rounded font-bold">EXISTENTE</span>}
+														</td>
+														<td className="px-3 py-2 text-right font-semibold">
+															{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.pidMnyValormn || d.valor || 0)}
+														</td>
+													</tr>
+												);
+											})}
+										</tbody>
+									</table>
+								</div>
+							</div>
+						)}
 					</CardContent>
 				</Card>
 
@@ -1130,7 +1173,7 @@ export default function ProcessCalculatorPage() {
 						<CardContent className="pt-6">
 							{/* RESUMO PRINCIPAL */}
 							<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-								<Card className="shadow-sm">
+								<Card className="shadow-sm border-l-4 border-l-blue-500">
 									<CardHeader className="pb-2">
 										<CardDescription className="text-gray-600 text-xs">Total Desembolsos</CardDescription>
 									</CardHeader>
@@ -1141,9 +1184,9 @@ export default function ProcessCalculatorPage() {
 									</CardContent>
 								</Card>
 
-								<Card className="shadow-sm">
+								<Card className="shadow-sm border-l-4 border-l-green-500">
 									<CardHeader className="pb-2">
-										<CardDescription className="text-gray-600 text-xs">Total Juros</CardDescription>
+										<CardDescription className="text-gray-600 text-xs">Total Juros (Contrato)</CardDescription>
 									</CardHeader>
 									<CardContent>
 										<p className="text-2xl font-bold text-gray-900">
@@ -1152,7 +1195,7 @@ export default function ProcessCalculatorPage() {
 									</CardContent>
 								</Card>
 
-								<Card className="shadow-sm">
+								<Card className="shadow-sm border-l-4 border-l-orange-500 bg-orange-50/30">
 									<CardHeader className="pb-2">
 										<CardDescription className="text-gray-600 text-xs">Total Encargos</CardDescription>
 									</CardHeader>
@@ -1163,6 +1206,43 @@ export default function ProcessCalculatorPage() {
 									</CardContent>
 								</Card>
 							</div>
+
+							{/* DESPESAS EXISTENTES NO CONEXOS */}
+							{result.despesas && result.despesas.length > 0 && (
+								<div className="mb-6">
+									<h3 className="text-sm font-semibold mb-3 text-gray-900">
+										Despesas Existentes no Conexos
+									</h3>
+									<div className="border border-gray-200 rounded-lg overflow-hidden">
+										<table className="w-full text-sm">
+											<thead className="bg-gray-700 text-white">
+												<tr>
+													<th className="px-3 py-2 text-left font-medium">Tipo</th>
+													<th className="px-3 py-2 text-left font-medium">Descrição</th>
+													<th className="px-3 py-2 text-right font-medium">Valor (BRL)</th>
+												</tr>
+											</thead>
+											<tbody className="divide-y divide-gray-100 italic">
+												{result.despesas.map((d: any, i: number) => {
+													const isFinancial = (d.descricao || '').toUpperCase().includes('ENCARGOS FINANCEIROS');
+													return (
+														<tr key={i} className={isFinancial ? "bg-yellow-50" : ""}>
+															<td className="px-3 py-2 text-gray-600">{d.tipo}</td>
+															<td className="px-3 py-2 text-gray-800 font-medium">
+																{d.descricao}
+																{isFinancial && <span className="ml-2 text-[8px] bg-yellow-100 text-yellow-700 px-1 rounded font-bold">ALERTA</span>}
+															</td>
+															<td className="px-3 py-2 text-right font-semibold">
+																{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor || 0)}
+															</td>
+														</tr>
+													);
+												})}
+											</tbody>
+										</table>
+									</div>
+								</div>
+							)}
 
 							<Separator className="my-6" />
 
@@ -1195,10 +1275,10 @@ export default function ProcessCalculatorPage() {
 								</div>
 							</div>
 
-							{/* DETALHAMENTO POR PAGAMENTO */}
+							{/* DETALHAMENTO POR MOVIMENTO */}
 							<div className="mb-6">
 								<h3 className="text-sm font-semibold mb-3 text-gray-900">
-									Detalhamento por Movimento
+									Detalhamento por Movimento (Contrato / Despesas)
 								</h3>
 								<div className="border border-gray-200 rounded-lg overflow-hidden">
 									<table className="w-full">
@@ -1213,41 +1293,40 @@ export default function ProcessCalculatorPage() {
 											</tr>
 										</thead>
 										<tbody>
-											{result.payments?.map((payment, index) => (
-												<tr
-													key={payment.id}
-													className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}
-												>
-													<td className="px-3 py-2 border-t border-gray-200">
-														<p className="text-sm font-medium text-gray-900">{payment.description}</p>
-														<Badge variant="outline" className="mt-1 text-xs">
-															{payment.type}
-														</Badge>
-													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm">
-														{formatCurrency(payment.value)}
-													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-center">
-														<span className="bg-gray-100 text-gray-800 px-2 py-1 rounded text-xs font-medium">
-															{payment.days} dias
-														</span>
-													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-center text-xs">
-														{formatRate(payment.interestRate! * 100)}%
-													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
-														{formatCurrency(payment.calculatedInterest!)}
-													</td>
-													<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
-														{formatCurrency(payment.value + payment.calculatedInterest!)}
-													</td>
-												</tr>
-											))}
+											{(result.movimentos || []).map((m: any, index: number) => {
+												return (
+													<tr
+														key={index}
+														className={`${index % 2 === 0 ? "bg-white" : "bg-gray-50"}`}
+													>
+														<td className="px-3 py-2 border-t border-gray-200">
+															<p className="text-sm font-medium text-gray-900">{m.historico}</p>
+														</td>
+														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm">
+															{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' }).format(m.valorUSD)}
+														</td>
+														<td className="px-3 py-2 border-t border-gray-200 text-center">
+															<span className="bg-gray-100 text-gray-800 px-2 py-1 rounded text-xs font-medium">
+																{m.diasCorridos} dias
+															</span>
+														</td>
+														<td className="px-3 py-2 border-t border-gray-200 text-center text-xs">
+															{formatRate(m.txSpot)}%
+														</td>
+														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
+															{formatCurrency(m.encargos)}
+														</td>
+														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
+															{formatCurrency(m.total)}
+														</td>
+													</tr>
+												);
+											})}
 										</tbody>
 										<tfoot className="bg-gray-100 border-t-2 border-gray-300">
 											<tr>
 												<td className="px-3 py-3 text-right font-bold text-sm text-gray-900" colSpan={4}>
-													TOTAIS A COBRAR:
+													TOTAIS A COBRAR (ENCARGOS):
 												</td>
 												<td className="px-3 py-3 text-right font-bold text-base text-gray-900">
 													{formatCurrency(result.totalInterest)}
@@ -1291,6 +1370,6 @@ export default function ProcessCalculatorPage() {
 					</Card>
 				)}
 			</div>
-		</ProtectedRoute>
+		</ProtectedRoute >
 	);
 }

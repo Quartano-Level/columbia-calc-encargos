@@ -61,7 +61,8 @@ export default function CalculationDetailPage() {
 
   const payload = calculation?.payload ?? calculation ?? {};
   const movimentos = Array.isArray(payload?.movimentos) ? payload.movimentos : (payload?.movements || payload?.payments || []);
-  const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' });
+  const currencyUSD = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' });
+  const currencyBRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
   const formatDate = (d: any) => {
     if (!d) return '—';
     const dt = new Date(d);
@@ -100,9 +101,27 @@ export default function CalculationDetailPage() {
             <h3 className="font-medium mb-2">Resumo</h3>
             <div className="text-sm text-gray-700 mb-2"><strong>Processo:</strong> {calculation.processo_id ?? '—'}</div>
             <div className="text-sm text-gray-700 mb-2"><strong>Cliente:</strong> {calculation.cliente_id ?? calculation.payload?.clienteId ?? '—'}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Valor:</strong> {currency.format(Number(calculation.total_desembolso ?? 0))}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Total movimentos:</strong> {currency.format(totalMovimentos)}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Calculado em:</strong> {calculation.calculated_at ? new Date(calculation.calculated_at).toLocaleString() : '—'}</div>
+            <div className="text-sm text-gray-700 mb-2"><strong>Valor (USD):</strong> {currencyUSD.format(Number(calculation.total_desembolso ?? 0))}</div>
+            <div className="text-sm text-gray-700 mb-2"><strong>Total Movimentos (USD):</strong> {currencyUSD.format(totalMovimentos)}</div>
+            {payload.totalLostInterest > 0 && (
+              <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded">
+                <div className="text-xs text-red-600 font-semibold uppercase tracking-wider">Juros Perdidos (Atraso)</div>
+                <div className="text-xl font-bold text-red-700">{currencyBRL.format(payload.totalLostInterest)}</div>
+                <div className="text-xs text-red-500 mt-1">* Calculado com base no CDI diário pós-vencimento.</div>
+              </div>
+            )}
+
+            {payload.hasExistingInterest && (
+              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded flex items-start gap-2">
+                <span className="text-yellow-600">⚠️</span>
+                <div>
+                  <div className="text-sm font-bold text-yellow-800">Atenção: Já existem lançamentos</div>
+                  <div className="text-xs text-yellow-700">Identificamos "Encargos Financeiros" na lista de despesas já lançadas no Conexos para este processo.</div>
+                </div>
+              </div>
+            )}
+
+            <div className="text-sm text-gray-700 mb-2 mt-4"><strong>Calculado em:</strong> {calculation.calculated_at ? new Date(calculation.calculated_at).toLocaleString() : '—'}</div>
             <div className="text-sm mt-3"><strong>Status:</strong> <span className={`px-2 py-1 rounded ${calculation.status === 'submitted' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{calculation.status}</span></div>
           </div>
 
@@ -116,28 +135,39 @@ export default function CalculationDetailPage() {
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Data</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Histórico</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Valor (USD)</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Encargos</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Total</th>
+                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Vencimento</th>
+                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Pagamento</th>
+                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Histórico</th>
+                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Valor (USD)</th>
+                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Atraso</th>
+                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Juros Perdidos (BRL)</th>
+                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Total (USD)</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {movimentos.map((m: any, i: number) => (
-                      <tr key={i}>
-                        <td className="px-3 py-2 text-sm text-gray-600">{formatDate(m.data || m.pipDtaVcto || m.paymentDate)}</td>
-                        <td className="px-3 py-2 text-sm text-gray-600">{m.historico || m.descricao || m.description || 'Parcela'}</td>
-                        <td className="px-3 py-2 text-sm text-right text-gray-700">{currency.format(Number(m.valorUSD ?? m.value ?? m.pipMnyValor ?? 0))}</td>
-                        <td className="px-3 py-2 text-sm text-right text-gray-700">{currency.format(Number(m.encargos ?? 0))}</td>
-                        <td className="px-3 py-2 text-sm text-right font-medium">{currency.format(Number(m.total ?? m.value ?? m.pipMnyValor ?? 0) + Number(m.encargos ?? 0))}</td>
+                      <tr key={i} className={m.lostInterest > 0 ? "bg-red-50/50" : ""}>
+                        <td className="px-2 py-2 text-sm text-gray-600">{formatDate(m.dueDate || m.pipDtaVcto)}</td>
+                        <td className="px-2 py-2 text-sm text-gray-600">{formatDate(m.paymentDate || m.data)}</td>
+                        <td className="px-2 py-2 text-sm text-gray-600">{m.historico || m.descricao || m.description || 'Parcela'}</td>
+                        <td className="px-2 py-2 text-sm text-right text-gray-700">{currencyUSD.format(Number(m.valorUSD ?? m.value ?? m.pipMnyValor ?? 0))}</td>
+                        <td className="px-2 py-2 text-sm text-right text-red-600 font-medium">
+                          {m.lateDays > 0 ? `${m.lateDays}d` : '—'}
+                        </td>
+                        <td className="px-2 py-2 text-sm text-right text-red-700 font-semibold">
+                          {m.lostInterest > 0 ? currencyBRL.format(m.lostInterest) : '—'}
+                        </td>
+                        <td className="px-2 py-2 text-sm text-right font-medium">
+                          {currencyUSD.format(Number(m.total ?? m.value ?? m.pipMnyValor ?? 0) + Number(m.encargos ?? 0))}
+                        </td>
                       </tr>
                     ))}
                     <tr>
-                      <td colSpan={2} className="px-3 py-2 text-sm font-medium">Total</td>
-                      <td className="px-3 py-2 text-sm text-right" />
-                      <td className="px-3 py-2 text-sm text-right" />
-                      <td className="px-3 py-2 text-sm text-right font-semibold">{currency.format(totalMovimentos)}</td>
+                      <td colSpan={3} className="px-2 py-2 text-sm font-medium">Total</td>
+                      <td className="px-2 py-2 text-sm text-right font-semibold">{currencyUSD.format(totalMovimentos)}</td>
+                      <td className="px-2 py-2 text-sm text-right" />
+                      <td className="px-2 py-2 text-sm text-right font-bold text-red-700">{payload.totalLostInterest > 0 ? currencyBRL.format(payload.totalLostInterest) : '—'}</td>
+                      <td className="px-2 py-2 text-sm text-right font-bold">{currencyUSD.format(totalMovimentos)}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -151,6 +181,34 @@ export default function CalculationDetailPage() {
 
             {showPayload && (
               <pre className="mt-4 text-xs bg-gray-100 p-3 rounded max-h-96 overflow-auto">{JSON.stringify(payload, null, 2)}</pre>
+            )}
+          </div>
+
+          <div className="md:col-span-3 bg-white shadow rounded p-4">
+            <h3 className="font-medium mb-4">Despesas Existentes no Conexos</h3>
+            {!payload.despesas || payload.despesas.length === 0 ? (
+              <div className="text-sm text-gray-500">Nenhuma despesa lançada no Conexos.</div>
+            ) : (
+              <div className="overflow-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Valor (BRL)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {payload.despesas.map((d: any, idx: number) => (
+                      <tr key={idx} className={d.descricao?.toUpperCase().includes('ENCARGOS FINANCEIROS') ? "bg-yellow-50" : ""}>
+                        <td className="px-3 py-2 text-sm text-gray-600">{d.tipo}</td>
+                        <td className="px-3 py-2 text-sm text-gray-700 font-medium">{d.descricao}</td>
+                        <td className="px-3 py-2 text-sm text-right text-gray-900 font-semibold">{currencyBRL.format(d.valor)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </div>
         </div>
