@@ -42,6 +42,8 @@ export const CalculationResultSchema = z.object({
   }),
   totalDisburse: z.number(),
   totalInterest: z.number(),
+  totalLostInterest: z.number().optional(),
   totalCharges: z.number(),
+  hasExistingInterest: z.boolean().optional(),
   payments: z.array(z.any()),
 });

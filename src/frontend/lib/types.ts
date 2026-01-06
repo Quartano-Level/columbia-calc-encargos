@@ -13,6 +13,8 @@ export interface Process {
 	priEspRefcliente?: string;
 	priCod?: number;
 	imcNumNumero?: string;
+	expenses?: any[];
+	hasExistingInterest?: boolean;
 }
 
 export interface Payment {
@@ -25,6 +27,9 @@ export interface Payment {
 	days?: number;
 	interestRate?: number;
 	calculatedInterest?: number;
+	lateDays?: number;
+	lostInterest?: number;
+	accumulatedFactor?: number;
 }
 
 export interface CalculationInput {
@@ -49,6 +54,14 @@ export interface CalculationResult {
 		taxaConecta: number;
 		effectiveRate: number;
 	};
+	despesas?: Array<{
+		tipo: string;
+		descricao: string;
+		valor: number;
+	}>;
+	totalLostInterest?: number;
+	hasExistingInterest?: boolean;
+	movimentos?: any[];
 }
 
 // Best-effort shape for backend calculation response (raw)

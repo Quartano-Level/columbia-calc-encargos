@@ -2,7 +2,7 @@
 
 import { useState, ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Menu, FileText, Clock, Settings, LogOut, User } from "lucide-react";
+import { Menu, FileText, Clock, Settings, LogOut, User, AlertTriangle } from "lucide-react";
 import { useAuth } from "./auth-provider";
 import { MicrosoftLoginButton } from "./microsoft-login-button";
 
@@ -78,18 +78,16 @@ export function AppLayout({ children }: AppLayoutProps) {
 			<div className="flex pt-20">
 				{/* Sidebar */}
 				<div
-					className={`${
-						sidebarOpen ? "w-56" : "w-0"
-					} transition-all duration-300 bg-white border-r border-gray-200 overflow-hidden fixed left-0 top-20 bottom-0 z-10 flex flex-col`}
+					className={`${sidebarOpen ? "w-56" : "w-0"
+						} transition-all duration-300 bg-white border-r border-gray-200 overflow-hidden fixed left-0 top-20 bottom-0 z-10 flex flex-col`}
 				>
 					<div className="p-4 flex-1">
 						<button
 							onClick={() => router.push("/")}
-							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${
-								isActive("/")
-									? "bg-[#337ab7] text-white"
-									: "text-gray-600 hover:bg-gray-50"
-							}`}
+							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${isActive("/")
+								? "bg-[#337ab7] text-white"
+								: "text-gray-600 hover:bg-gray-50"
+								}`}
 						>
 							<FileText size={18} />
 							Processos
@@ -97,14 +95,24 @@ export function AppLayout({ children }: AppLayoutProps) {
 
 						<button
 							onClick={() => router.push("/calculations")}
-							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${
-								isActive("/calculations")
-									? "bg-[#337ab7] text-white"
-									: "text-gray-600 hover:bg-gray-50"
-							}`}
+							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${isActive("/calculations")
+								? "bg-[#337ab7] text-white"
+								: "text-gray-600 hover:bg-gray-50"
+								}`}
 						>
 							<Clock size={18} />
 							Histórico
+						</button>
+
+						<button
+							onClick={() => router.push("/analysis/delays")}
+							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${isActive("/analysis/delays")
+									? "bg-[#337ab7] text-white"
+									: "text-gray-600 hover:bg-gray-50"
+								}`}
+						>
+							<AlertTriangle size={18} />
+							Análise de Atrasos
 						</button>
 						{/* <nav className="space-y-2">
 							<button className="w-full text-left px-4 py-2.5 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2 transition">
@@ -126,9 +134,8 @@ export function AppLayout({ children }: AppLayoutProps) {
 
 				{/* Main Content */}
 				<div
-					className={`${
-						sidebarOpen ? "ml-56" : "ml-0"
-					} flex-1 transition-all duration-300`}
+					className={`${sidebarOpen ? "ml-56" : "ml-0"
+						} flex-1 transition-all duration-300`}
 				>
 					{children}
 				</div>

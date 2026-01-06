@@ -8,7 +8,7 @@ export type CalculationResult = {
   custosUSD?: Record<string, any>;
   cambio?: Record<string, any>;
   impostos?: Record<string, any>;
-  despesas?: Record<string, any>;
+  despesas?: any;
   encargos?: Record<string, any>;
   custos?: Record<string, any>;
   precos?: Record<string, any>;

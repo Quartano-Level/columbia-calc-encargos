@@ -105,22 +105,27 @@ router.get('/:id', async (req, res) => {
   try {
     const processo = await conexosService.getProcessById(req.params.id);
 
-    // Tentar buscar parcelas/movimentos do Conexos e mapear para formato expected pelo frontend
+    // Tentar buscar parcelas/movimentos do Conexos e títulos financeiros (para vencimento real)
     let payments: any[] = [];
     let parcelsError: string | null = null;
     try {
-      const rawParcels = await conexosService.getParcelsByProcessId(req.params.id);
-      // Conexos pode retornar { rows: [...] } ou array direto
+      const priCodNum = Number(req.params.id);
+      const [rawParcels, financialTitles] = await Promise.all([
+        conexosService.getParcelsByProcessId(req.params.id),
+        !isNaN(priCodNum) ? conexosService.getFinancialTitlesPsq015(priCodNum) : Promise.resolve([])
+      ]);
+
       const parcels = Array.isArray(rawParcels) ? rawParcels : rawParcels?.rows || [];
+      const titles = Array.isArray(financialTitles) ? financialTitles : financialTitles?.rows || [];
 
       payments = parcels.map((p: any, idx: number) => {
-        const dateVal = p.pipDtaVcto || p.data || p.dta || p.dtaVcto || null;
-        // Se for timestamp numérico, converter para ISO string
+        const dueDateVal = titles.length > 0 ? titles[0].titDtaVencimento : (p.pipDtaVcto || null);
+        const paymentDateVal = p.borDtaMvto || p.bxaDtaBaixa || null;
+
         const toIso = (d: any) => {
           if (!d) return new Date().toISOString();
           if (typeof d === 'number') return new Date(d).toISOString();
-          // Strings podem estar em formato ISO já
-          return new Date(d).toISOString();
+          try { return new Date(d).toISOString(); } catch { return new Date().toISOString(); }
         };
 
         return {
@@ -128,11 +133,12 @@ router.get('/:id', async (req, res) => {
           type: 'cambio',
           description: p.historico || p.descricao || p.hist || 'Parcela',
           value: Number(p.pipMnyValor || p.valorUSD || p.valor || 0) || 0,
-          paymentDate: toIso(dateVal),
-          dueDate: toIso(dateVal),
+          paymentDate: toIso(paymentDateVal),
+          dueDate: toIso(dueDateVal),
           days: Number(p.diasCorridos || p.days || 0) || 0,
           interestRate: Number(p.txSpot || p.tx_spot || 0) || 0,
           calculatedInterest: Number(p.encargos || p.encargo || 0) || 0,
+          titDtaVencimento: titles.length > 0 ? titles[0].titDtaVencimento : null
         };
       });
     } catch (innerErr: any) {
@@ -140,6 +146,15 @@ router.get('/:id', async (req, res) => {
       console.warn('Failed to fetch parcels for process', req.params.id, innerErr?.message || innerErr);
       payments = [];
       parcelsError = innerErr?.response?.data ? JSON.stringify(innerErr.response.data) : (innerErr?.message || String(innerErr));
+    }
+
+    // Buscar despesas já existentes no Conexos
+    let expenses: any[] = [];
+    try {
+      const respExpenses = await conexosService.getDespesasByProcessId(req.params.id);
+      expenses = Array.isArray(respExpenses) ? respExpenses : (respExpenses?.rows || []);
+    } catch (expErr) {
+      console.warn('Failed to fetch expenses for process', req.params.id, expErr);
     }
 
     // Normalizar processo para a forma esperada pelo frontend, mantendo os campos originais
@@ -175,6 +190,10 @@ router.get('/:id', async (req, res) => {
       createdAt: rawProcess?.priDtaAbertura ? new Date(rawProcess.priDtaAbertura).toISOString() : (rawProcess?.imcDtaFechamento ? new Date(rawProcess.imcDtaFechamento).toISOString() : new Date().toISOString()),
       updatedAt: rawProcess?.priTimAlteracao ? new Date(rawProcess.priTimAlteracao).toISOString() : new Date().toISOString(),
       raw: rawProcess,
+      expenses,
+      hasExistingInterest: expenses.some((d: any) =>
+        (d.impDesNome || d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
+      ),
     };
 
     res.json({ source: 'conexos', data: { process: normalizedProcess, payments, parcelsError } });

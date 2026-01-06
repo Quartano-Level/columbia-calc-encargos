@@ -170,7 +170,10 @@ export async function calculateCharges(id: string, input: CalculationInput): Pro
 			taxaCDI: Number(normalizedRaw.cambio?.cdiAM) || input.taxaCDI || 0,
 			taxaConecta: Number(normalizedRaw.cambio?.txSpotCompra) || input.taxaConecta || 0,
 			effectiveRate: 0,
-		}
+		},
+		despesas: Array.isArray(normalizedRaw.despesas) ? normalizedRaw.despesas : [],
+		totalLostInterest: Number(normalizedRaw.totalLostInterest) || 0,
+		hasExistingInterest: !!normalizedRaw.hasExistingInterest
 	};
 	return result;
 }

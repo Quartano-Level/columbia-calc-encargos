@@ -20,6 +20,9 @@ export interface Payment {
 	days?: number;
 	interestRate?: number;
 	calculatedInterest?: number;
+	lostInterest?: number;
+	lateDays?: number;
+	accumulatedFactor?: number;
 }
 
 export interface CalculationInput {
@@ -68,7 +71,9 @@ export interface CalculationResult {
 		total: number;
 	}>;
 	totalInterest: number;
+	totalLostInterest?: number;
 	totalCharges: number;
+	hasExistingInterest?: boolean;
 	payments: Payment[];
 	summary: any;
 }
