@@ -2,14 +2,14 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { fetchProcessesWithContracts, ProcessWithContract } from "@/lib/api";
+import { fetchProcessesWithContracts, ProcessWithContract, fetchCDI } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AuthErrorAlert } from "@/components/auth-error-alert";
 import { ProtectedRoute } from "@/components/protected-route";
-import { Search, Filter, FileText, Calendar, DollarSign, ChevronRight } from "lucide-react";
+import { Search, Filter, FileText, Calendar, DollarSign, ChevronRight, AlertTriangle, TrendingDown } from "lucide-react";
 
 // Helper to map currency names to ISO codes for Intl.NumberFormat
 function getCurrencyCode(name: string): string {
@@ -31,10 +31,15 @@ export default function Home() {
 		createdAt: string;
 		contracts: any[];
 		totalValue: string;
+		hasDelay: boolean;
+		totalLostInterest: number;
 	};
 
 	const [processes, setProcesses] = useState<ProcessTableRow[]>([]);
 	const [calculatedProcessesCount, setCalculatedProcessesCount] = useState<number>(0);
+	const [totalLostInterestGlobal, setTotalLostInterestGlobal] = useState<number>(0);
+	const [delayedProcessesCount, setDelayedProcessesCount] = useState<number>(0);
+	const [cdiList, setCdiList] = useState<any[]>([]);
 	const [filteredProcesses, setFilteredProcesses] = useState<ProcessTableRow[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -66,9 +71,28 @@ export default function Home() {
 
 
 	// Função de mapping dos dados vindos do backend/Conexos para os campos da tabela
-	function mapProcess(raw: ProcessWithContract): ProcessTableRow {
+	function mapProcess(raw: ProcessWithContract, currentCdiList: any[]): ProcessTableRow {
 		const contracts = raw.contracts || [];
 		const total = contracts.reduce((sum, c) => sum + (Number(c.vlrMneg) || 0), 0);
+
+		let hasDelay = false;
+		let processLostInterest = 0;
+
+		contracts.forEach(contract => {
+			const dueDate = contract.titDtaVencimento ? new Date(contract.titDtaVencimento) : null;
+			const paymentDate = contract.borDtaMvto ? new Date(contract.borDtaMvto) : null;
+			const valorBRL = Number(contract.vlrTotalNac || 0);
+
+			if (dueDate && paymentDate && paymentDate > dueDate && valorBRL > 0) {
+				hasDelay = true;
+				const diffTime = Math.abs(paymentDate.getTime() - dueDate.getTime());
+				const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+				const latestCdi = currentCdiList?.[0]?.ftxNumFatDiario || 0.045;
+				const interest = valorBRL * (latestCdi / 100) * diffDays;
+				processLostInterest += interest;
+			}
+		});
 
 		return {
 			id: String(raw.priCod || raw.id),
@@ -78,6 +102,8 @@ export default function Home() {
 			createdAt: (raw as any).priDtaAbertura ? new Date((raw as any).priDtaAbertura).toISOString() : '',
 			contracts: contracts,
 			totalValue: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' }).format(total),
+			hasDelay,
+			totalLostInterest: processLostInterest,
 		};
 	}
 
@@ -85,10 +111,32 @@ export default function Home() {
 		try {
 			setLoading(true);
 			setError(null);
+
+			// Carregar CDI primeiro para os cálculos
+			const cdiData = await fetchCDI();
+			setCdiList(cdiData);
+
 			const response = await fetchProcessesWithContracts();
 			console.log('[page] Processos com contratos:', response);
-			// Faz o mapping dos dados recebidos
-			setProcesses(response.processes.map(mapProcess));
+
+			// Mapear processos simples para a lista
+			const mapped = response.processes.map(p => ({
+				id: String(p.priCod || p.id),
+				processNumber: p.priEspRefcliente || p.processNumber || String(p.priCod || p.id),
+				clientName: p.dpeNomPessoa || p.clientName || '—',
+				priVldImpexpDesc: p.incoterm || '—',
+				createdAt: (p as any).priDtaAbertura ? new Date((p as any).priDtaAbertura).toISOString() : '',
+				contracts: p.contracts || [],
+				totalValue: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' }).format((p.contracts || []).reduce((sum: number, c: any) => sum + (Number(c.vlrMneg) || 0), 0)),
+				hasDelay: false,
+				totalLostInterest: 0,
+			}));
+			setProcesses(mapped as any);
+
+			// Atualizar estatísticas globais (apenas total processos)
+			setTotalLostInterestGlobal(0);
+			setDelayedProcessesCount(0);
+
 			// Keep rows collapsed by default as requested
 			setExpandedRows(new Set());
 			setCalculatedProcessesCount(0);
@@ -141,15 +189,18 @@ export default function Home() {
 	const stats = [
 		{ label: "Total Processos", value: processes.length, icon: FileText },
 		{
-			label: "Pendentes",
-			value: processes.length,
-			icon: Calendar,
-			highlighted: true,
+			label: "Com Atraso",
+			value: delayedProcessesCount,
+			icon: AlertTriangle,
+			highlighted: delayedProcessesCount > 0,
+			severity: 'warning'
 		},
 		{
-			label: "Calculados",
-			value: calculatedProcessesCount,
-			icon: DollarSign,
+			label: "Juros Perdidos",
+			value: new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(totalLostInterestGlobal),
+			icon: TrendingDown,
+			highlighted: totalLostInterestGlobal > 0,
+			severity: 'danger'
 		},
 	];
 
@@ -196,20 +247,22 @@ export default function Home() {
 
 					{/* Stats Cards - Compact Version */}
 					<div className="flex gap-3">
-						{stats.map((stat, idx) => {
+						{stats.slice(0, 1).map((stat, idx) => {
 							const IconComponent = stat.icon;
+							let bgColor = "bg-white border-gray-200 text-gray-900 shadow-sm";
+							let iconColor = "text-gray-400";
+							let labelColor = "text-gray-500";
+							let subLabelColor = "text-gray-500";
+
 							return (
 								<div
 									key={idx}
-									className={`px-4 py-2 rounded-lg border flex items-center gap-3 min-w-[180px] ${stat.highlighted
-										? "bg-[#337ab7] text-white border-[#286090]"
-										: "bg-white text-gray-900 border-gray-200 shadow-sm"
-										}`}
+									className={`px-4 py-2 rounded-lg border flex items-center gap-3 min-w-[200px] ${bgColor}`}
 								>
-									<IconComponent size={18} className={stat.highlighted ? "text-blue-100" : "text-gray-400"} />
+									<IconComponent size={20} className={iconColor} />
 									<div>
-										<div className="text-sm font-bold leading-tight">{stat.value}</div>
-										<div className={`text-[10px] uppercase font-bold tracking-wider ${stat.highlighted ? "text-blue-100/80" : "text-gray-500"}`}>{stat.label}</div>
+										<div className={`text-base font-bold leading-tight ${labelColor}`}>{stat.value}</div>
+										<div className={`text-[10px] uppercase font-bold tracking-wider ${subLabelColor}`}>{stat.label}</div>
 									</div>
 								</div>
 							);
@@ -281,6 +334,11 @@ export default function Home() {
 											<td className="px-4 py-3 text-sm text-gray-700">{process.clientName}</td>
 											<td className="px-4 py-3">
 												<span className="text-[11px] font-bold text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">{process.priVldImpexpDesc}</span>
+												{process.hasDelay && (
+													<span className="ml-2 text-[10px] font-bold bg-red-100 text-red-600 px-1.5 py-0.5 rounded animate-pulse">
+														ATRASO
+													</span>
+												)}
 											</td>
 											<td className="px-4 py-3 text-right text-sm text-gray-900 border-l border-gray-50/50">
 												{process.totalValue}
@@ -301,7 +359,6 @@ export default function Home() {
 																<thead>
 																	<tr className="bg-gray-50/80 border-b border-gray-100">
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">ID Contr.</th>
-																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Pagto / Venc.</th>
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Status</th>
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Taxa</th>
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Moeda</th>
@@ -312,18 +369,10 @@ export default function Home() {
 																</thead>
 																<tbody className="divide-y divide-gray-50">
 																	{process.contracts.map((contract: any) => {
-																		const paymentDate = contract.borDtaMvto
-																			? new Date(contract.borDtaMvto).toLocaleDateString('pt-BR')
-																			: (contract.imcDtaLiquidacao
-																				? `Venc: ${new Date(contract.imcDtaLiquidacao).toLocaleDateString('pt-BR')}`
-																				: '—');
-
 																		const paymentStatus = contract.borDtaMvto ? 'Pago' : 'Aberto';
-
 																		return (
 																			<tr key={contract.imcCod} className="hover:bg-blue-50/5 transition-colors">
 																				<td className="px-3 py-2 text-[11px] font-bold text-gray-500 font-mono">{contract.imcCod}</td>
-																				<td className="px-3 py-2 text-[11px] text-gray-600">{paymentDate}</td>
 																				<td className="px-3 py-2">
 																					<span className={`px-1.5 py-0 rounded text-[8px] font-bold uppercase border ${paymentStatus === 'Pago'
 																						? 'bg-green-50 text-green-600 border-green-100'
