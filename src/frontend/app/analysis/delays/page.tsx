@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, TrendingDown, Clock, CheckCircle2, Info, X, FileDown, ChevronDown, ChevronRight } from "lucide-react";
 import { ProtectedRoute } from "@/components/protected-route";
 import { formatRate } from "@/lib/utils";
+import { exportDelaysCSV } from "@/lib/csv";
 
 interface GroupedProcess {
     priCod: number;
@@ -24,6 +25,7 @@ export default function DelaysAnalysisPage() {
     const [groupedProcesses, setGroupedProcesses] = useState<GroupedProcess[]>([]);
     const [expandedProcesses, setExpandedProcesses] = useState<Set<number>>(new Set());
     const [selectedDoc, setSelectedDoc] = useState<any | null>(null);
+    const [allProcesses, setAllProcesses] = useState<any[]>([]);
     const [cdiRate, setCdiRate] = useState<number>(0);
     const [stats, setStats] = useState({
         totalLostInterest: 0,
@@ -43,6 +45,7 @@ export default function DelaysAnalysisPage() {
             setLoading(true);
             const cdiData = await fetchCDI();
             const response = await fetchProcessesWithContracts();
+            setAllProcesses(response.processes || []);
 
             const cdiDiario = cdiData?.[0]?.ftxNumFatDiario || 0.045;
 
@@ -252,6 +255,10 @@ export default function DelaysAnalysisPage() {
         printWindow.document.close();
     };
 
+    const exportToCSV = () => {
+        exportDelaysCSV({ processes: allProcesses });
+    };
+
     if (loading) {
         return (
             <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
@@ -345,6 +352,12 @@ export default function DelaysAnalysisPage() {
                             Ranking de Processos Críticos
                         </h3>
                         <div className="flex items-center gap-3">
+                            <button
+                                onClick={exportToCSV}
+                                className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"
+                            >
+                                <FileDown size={14} /> Exportar CSV
+                            </button>
                             <button
                                 onClick={exportToPDF}
                                 className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"

@@ -8,7 +8,7 @@ class ConexosService {
 
   constructor() {
     this.client = axios.create({
-      baseURL: process.env.CONEXOS_BASE_URL || 'https://columbiatrading-hml.conexos.cloud/api',
+      baseURL: process.env.CONEXOS_BASE_URL || 'https://columbiatrading.conexos.cloud/api',
       timeout: 10000,
     });
   }
@@ -474,16 +474,17 @@ class ConexosService {
     await this.ensureSid();
 
     // Construir filterList - filtrar por intervalo se fornecido
+    // API Conexos para filtros espera timestamp em milisegundos
     const filterList: Record<string, any> = {};
     if (startDate) {
-      // Converter data ISO (YYYY-MM-DD) para timestamp em milissegundos (meia-noite UTC)
-      const dateObj = new Date(startDate);
-      dateObj.setUTCHours(0, 0, 0, 0);
+      // Converter data ISO (YYYY-MM-DD) para timestamp em milissegundos
+      // Considera início do dia no fuso de Brasília (-03:00)
+      const dateObj = new Date(startDate + 'T00:00:00-03:00');
       filterList["ftxDtaTaxa#GE"] = dateObj.getTime();
     }
     if (endDate) {
-      const dateObj = new Date(endDate);
-      dateObj.setUTCHours(0, 0, 0, 0);
+      // Considera fim do dia no fuso de Brasília (-03:00)
+      const dateObj = new Date(endDate + 'T23:59:59.999-03:00');
       filterList["ftxDtaTaxa#LE"] = dateObj.getTime();
     }
 
@@ -491,7 +492,7 @@ class ConexosService {
       fieldList: [],
       filterList,
       pageNumber: 1,
-      pageSize: 20,
+      pageSize: 100,
       serviceName: "fin101.FinTaxasCDI",
       orderList: { orderList: [{ propertyName: "ftxDtaTaxa", order: "desc" }] }
     };
@@ -505,10 +506,25 @@ class ConexosService {
       'accept': 'application/json, text/plain, */*',
     });
 
+    const url = '/fin101/FinTaxasCDI/list';
+    console.log('\n========== CDI REQUEST DEBUG ==========');
+    console.log('URL:', url);
+    console.log('METHOD: POST');
+    console.log('PAYLOAD:', JSON.stringify(body, null, 2));
+    console.log('========================================\n');
+
     try {
-      const resp = await this.client.post('/fin101/FinTaxasCDI/list', body, { headers: getHeaders() });
+      const resp = await this.client.post(url, body, { headers: getHeaders() });
+      console.log('[CDI Response] Status:', resp.status);
+      console.log('[CDI Response] count:', resp.data?.count, 'rows:', resp.data?.rows?.length);
+      console.log('[CDI Response] Full data:', JSON.stringify(resp.data, null, 2));
       return resp.data;
     } catch (err: any) {
+      console.log('\n========== CDI ERROR DEBUG ==========');
+      console.log('[CDI Error] Status:', err.response?.status);
+      console.log('[CDI Error] Response:', JSON.stringify(err.response?.data, null, 2));
+      console.log('======================================\n');
+
       // If unauthorized, try to login and retry POST
       if (err.response && err.response.status === 401) {
         console.log('[Conexos] 401 em getCDI, refazendo login...');

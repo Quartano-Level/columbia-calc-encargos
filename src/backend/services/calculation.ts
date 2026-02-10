@@ -31,7 +31,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
 
   // CDI: PRIORIZAR INPUT MANUAL (CDI Diário)
   const cdiDiario = input.taxaCDI !== undefined ? Number(input.taxaCDI) : (Number(cdiList?.[0]?.ftxNumFatDiario) || 0);
-  const txSpotCompra = Number(input.taxaConecta) || 0;
+  const txSpotCompra = Number(input.taxaConexos) || 0;
 
   // Mapear parcelas para movimentos
   const toDateIso = (d: any) => {
@@ -166,7 +166,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
       calculadoEm: new Date().toISOString(),
       calculationDate: new Date().toISOString(),
       taxaCDI: cdiDiario,
-      taxaConecta: txSpotCompra,
+      taxaConexos: txSpotCompra,
       effectiveRate: (txSpotCompra + cdiDiario) / 100,
     },
     totalDisburse: totalDisburse,

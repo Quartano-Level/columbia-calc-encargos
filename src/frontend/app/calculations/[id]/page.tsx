@@ -42,7 +42,7 @@ export default function CalculationDetailPage() {
 
   const submitCalculation = async () => {
     if (!calculation?.id) return;
-    if (!confirm('Confirma submeter esse cálculo ao Conecta?')) return;
+    if (!confirm('Confirma submeter esse cálculo ao Conexos?')) return;
     setSubmitting(true);
     try {
       const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/calculations/${calculation.id}/submit`, {

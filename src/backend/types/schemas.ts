@@ -37,7 +37,7 @@ export const CalculationResultSchema = z.object({
     calculadoEm: z.string(),
     calculationDate: z.string().optional(),
     taxaCDI: z.number().optional(),
-    taxaConecta: z.number().optional(),
+    taxaConexos: z.number().optional(),
     effectiveRate: z.number().optional(),
   }),
   totalDisburse: z.number(),
