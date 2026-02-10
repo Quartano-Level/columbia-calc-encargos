@@ -30,7 +30,7 @@ export interface CalculationInput {
 	emissionDate: string;
 	payments: Payment[];
 	taxaCDI: number; // Taxa CDI anual (%)
-	taxaConecta: number; // Taxa do Conecta (%)
+	taxaConexos: number; // Taxa do Conexos (%)
 	taxaCalculada?: number; // Taxa calculada (opcional)
 }
 
@@ -78,11 +78,34 @@ export interface CalculationResult {
 	summary: any;
 }
 
-export interface ConectaSubmission {
+export interface ConexosSubmission {
 	processId: string;
 	clientName: string;
 	totalCharges: number;
 	encargosFinanceiros: number;
 	taxaFinanceira: number;
 	submittedAt: string;
+}
+
+// BCB (Banco Central do Brasil) API types
+
+/** Raw entry from BCB API response */
+export interface BCBRateEntry {
+	data: string;  // DD/MM/YYYY
+	valor: string; // daily rate as % (e.g., "0.055131")
+}
+
+/** Normalized BCB rate with ISO date and numeric values */
+export interface NormalizedRate {
+	date: string;        // YYYY-MM-DD
+	dailyRate: number;   // percentage (e.g., 0.055131)
+	dailyFactor: number; // 1 + dailyRate/100 (e.g., 1.00055131)
+}
+
+/** CDI rate annualized from daily BCB data */
+export interface AnnualizedCDI {
+	date: string;
+	dailyRate: number;
+	annualRate: number;  // ((1+rate/100)^252 - 1) * 100
+	monthlyRate: number; // (annualRate / 12) + 0.4
 }

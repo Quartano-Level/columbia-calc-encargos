@@ -3,6 +3,7 @@ import cors from 'cors';
 import calculationsRouter from './routes/calculations.js';
 import processesRouter from './routes/processes.js';
 import cdiRouter from './routes/cdi.js';
+import bcbRouter from './routes/bcb.js';
 
 
 const app = express();
@@ -14,6 +15,7 @@ app.use('/calculate', calculationsRouter);
 app.use('/calculations', calculationsRouter);
 app.use('/processes', processesRouter);
 app.use('/cdi', cdiRouter);
+app.use('/bcb', bcbRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
