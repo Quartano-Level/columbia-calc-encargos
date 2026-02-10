@@ -37,7 +37,7 @@ export interface CalculationInput {
 	emissionDate: string;
 	payments: Payment[];
 	taxaCDI: number;
-	taxaConecta: number;
+	taxaConexos: number;
 	taxaCalculada?: number;
 }
 
@@ -51,7 +51,7 @@ export interface CalculationResult {
 	summary: {
 		calculationDate: string;
 		taxaCDI: number;
-		taxaConecta: number;
+		taxaConexos: number;
 		effectiveRate: number;
 	};
 	despesas?: Array<{
@@ -62,6 +62,14 @@ export interface CalculationResult {
 	totalLostInterest?: number;
 	hasExistingInterest?: boolean;
 	movimentos?: any[];
+}
+
+/** CDI rate annualized from BCB API */
+export interface BCBAnnualizedCDI {
+	date: string;
+	dailyRate: number;
+	annualRate: number;
+	monthlyRate: number;
 }
 
 // Best-effort shape for backend calculation response (raw)

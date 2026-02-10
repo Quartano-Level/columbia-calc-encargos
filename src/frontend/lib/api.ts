@@ -1,4 +1,4 @@
-import { Process, Payment, CalculationInput, CalculationResult, BackendCalculationResponse } from "./types";
+import { Process, Payment, CalculationInput, CalculationResult, BackendCalculationResponse, BCBAnnualizedCDI } from "./types";
 import { mapBackendToCalculationResult } from "./mappers";
 
 
@@ -168,7 +168,7 @@ export async function calculateCharges(id: string, input: CalculationInput): Pro
 		summary: {
 			calculationDate: normalizedRaw.summary?.calculadoEm || new Date().toISOString(),
 			taxaCDI: Number(normalizedRaw.cambio?.cdiAM) || input.taxaCDI || 0,
-			taxaConecta: Number(normalizedRaw.cambio?.txSpotCompra) || input.taxaConecta || 0,
+			taxaConexos: Number(normalizedRaw.cambio?.txSpotCompra) || input.taxaConexos || 0,
 			effectiveRate: 0,
 		},
 		despesas: Array.isArray(normalizedRaw.despesas) ? normalizedRaw.despesas : [],
@@ -179,7 +179,21 @@ export async function calculateCharges(id: string, input: CalculationInput): Pro
 }
 
 
-export async function submitToConecta(id: string, result: CalculationResult & { clientName: string }): Promise<{ success: boolean; message: string }> {
+export async function fetchBCBLatestCDI(): Promise<BCBAnnualizedCDI | null> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/bcb/cdi/latest`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return null;
+		const data = await response.json();
+		return data?.data || null;
+	} catch {
+		return null;
+	}
+}
+
+export async function submitToConexos(id: string, result: CalculationResult & { clientName: string }): Promise<{ success: boolean; message: string }> {
 	const response = await fetch(`${API_BASE_URL}/calculations/${id}/submit`, {
 		method: "POST",
 		headers: {
