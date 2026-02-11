@@ -1,26 +1,13 @@
 /**
- * Utilitário de geração e download de CSV para exportação de relatórios.
- * Segue RFC 4180 para escaping de campos.
+ * Utilitário de geração e download de XLSX para exportação de relatórios.
+ * Usa SheetJS (xlsx) para gerar planilhas com cabeçalho fixo.
  */
-
-/**
- * Escapa um campo CSV conforme RFC 4180.
- * Envolve em aspas duplas se o valor contém vírgulas, aspas ou quebras de linha.
- */
-function escapeCSVField(value: string | number | null | undefined): string {
-  if (value === null || value === undefined) return '';
-  const str = String(value);
-  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
+import * as XLSX from 'xlsx';
 
 /**
  * Formata data (ISO ou timestamp) como dd/mm/yyyy, compensando fuso horário.
- * Retorna string vazia se input for nulo/indefinido.
  */
-function formatDateForCSV(dateStr: string | number | null | undefined): string {
+function formatDateForExport(dateStr: string | number | null | undefined): string {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '';
@@ -32,76 +19,66 @@ function formatDateForCSV(dateStr: string | number | null | undefined): string {
 }
 
 /**
- * Formata número com locale pt-BR (ex: 1.234,56) sem símbolo de moeda.
- */
-function formatCurrencyForCSV(value: number | null | undefined, decimals = 2): string {
-  if (value === null || value === undefined || isNaN(Number(value))) return '';
-  return Number(value).toLocaleString('pt-BR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-}
-
-/**
- * Monta um array de 12 campos para uma linha do CSV.
+ * Monta um array de 13 campos para uma linha da planilha.
  *
- * Colunas: Código | Referência | Cliente | Incoterm |
+ * Colunas: Filial | Código | Referência | Cliente | Incoterm |
  *          Taxa | Moeda | Vlr. Negociado | Vlr. Nacional |
  *          Documento | Vencimento | Baixa | Atraso (dias)
  */
-function buildCSVRow(
+function buildRow(
   process: any,
   contract: any | null,
   title: any | null,
   discharge: any | null
-): string[] {
-  const codigo = String(process.priCod || '');
+): (string | number | null)[] {
+  const filCod = title?.filCod ?? contract?.filCod ?? '';
+  const codigo = process.priCod || '';
   const referencia = process.priEspRefcliente || process.processNumber || String(process.priCod || '');
   const cliente = process.dpeNomPessoa || process.clientName || '';
   const incoterm = process.incoterm || '';
 
-  const taxa = contract?.imcFltTxFec != null
-    ? Number(contract.imcFltTxFec).toLocaleString('pt-BR', { minimumFractionDigits: 4, maximumFractionDigits: 4 })
-    : '';
+  const taxa = contract?.imcFltTxFec != null ? Number(contract.imcFltTxFec) : null;
   const moeda = contract?.moeEspNome || '';
-  const vlrNegociado = contract?.vlrMneg != null ? formatCurrencyForCSV(Number(contract.vlrMneg)) : '';
-  const vlrNacional = contract?.vlrTotalNac != null ? formatCurrencyForCSV(Number(contract.vlrTotalNac)) : '';
+  const vlrNegociado = contract?.vlrMneg != null ? Number(contract.vlrMneg) : null;
+  const vlrNacional = contract?.vlrTotalNac != null ? Number(contract.vlrTotalNac) : null;
 
   let documento = '';
   let vencimento = '';
   let baixa = '';
-  let atrasoDias = '';
+  let atrasoDias: number | '' = '';
 
   if (title && discharge) {
     documento = title.titEspNumero || title.docEspNumero || String(title.titCod || '');
-    vencimento = formatDateForCSV(title.titDtaVencimento);
-    baixa = formatDateForCSV(discharge.borDtaMvto || discharge.bxaDtaBaixa);
+    vencimento = formatDateForExport(title.titDtaVencimento);
+    baixa = formatDateForExport(discharge.borDtaMvto || discharge.bxaDtaBaixa);
 
     const dueDate = title.titDtaVencimento ? new Date(title.titDtaVencimento) : null;
     const paymentDateStr = discharge.borDtaMvto || discharge.bxaDtaBaixa;
     const paymentDate = paymentDateStr ? new Date(paymentDateStr) : null;
 
     if (dueDate && paymentDate && paymentDate > dueDate) {
-      const days = Math.ceil(
+      atrasoDias = Math.ceil(
         Math.abs(paymentDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)
       );
-      atrasoDias = String(days);
     }
   }
 
   return [
-    codigo, referencia, cliente, incoterm,
+    filCod, codigo, referencia, cliente, incoterm,
     taxa, moeda, vlrNegociado, vlrNacional,
     documento, vencimento, baixa, atrasoDias,
   ];
 }
 
-export interface ExportDelaysCSVParams {
+export interface ExportDelaysParams {
   processes: any[];
 }
 
+/** @deprecated Use exportDelaysXLSX instead */
+export const exportDelaysCSV = exportDelaysXLSX;
+
 /**
- * Gera CSV com todos os contratos e dispara download.
+ * Gera XLSX com todos os contratos e dispara download.
  *
  * Lógica de mapeamento:
  * - Para cada processo, coleta documentos atrasados (paymentDate > dueDate)
@@ -110,20 +87,19 @@ export interface ExportDelaysCSVParams {
  * - Se não há documentos atrasados: cada contrato recebe 1 linha com colunas doc vazias
  * - Processos sem contratos: 1 linha com apenas info do processo
  */
-export function exportDelaysCSV({ processes }: ExportDelaysCSVParams): void {
+export function exportDelaysXLSX({ processes }: ExportDelaysParams): void {
   const headers = [
-    'Código', 'Referência', 'Cliente', 'Incoterm',
+    'Filial', 'Código', 'Referência', 'Cliente', 'Incoterm',
     'Taxa', 'Moeda', 'Vlr. Negociado', 'Vlr. Nacional',
     'Documento', 'Vencimento', 'Baixa', 'Atraso (dias)',
   ];
 
-  const rows: string[][] = [];
+  const dataRows: (string | number | null)[][] = [];
 
   for (const process of processes) {
     const contracts = process.contracts || [];
     const titles = process.payments || [];
 
-    // Coletar documentos atrasados (mesma lógica da página de atrasos)
     const delayedDischarges: Array<{ title: any; discharge: any }> = [];
 
     for (const title of titles) {
@@ -140,48 +116,59 @@ export function exportDelaysCSV({ processes }: ExportDelaysCSVParams): void {
     }
 
     if (contracts.length === 0) {
-      // Processo sem contratos
       if (delayedDischarges.length > 0) {
         for (const { title, discharge } of delayedDischarges) {
-          rows.push(buildCSVRow(process, null, title, discharge));
+          dataRows.push(buildRow(process, null, title, discharge));
         }
       } else {
-        rows.push(buildCSVRow(process, null, null, null));
+        dataRows.push(buildRow(process, null, null, null));
       }
     } else if (delayedDischarges.length > 0) {
-      // Primeiro contrato recebe todas as linhas de docs atrasados
       for (const { title, discharge } of delayedDischarges) {
-        rows.push(buildCSVRow(process, contracts[0], title, discharge));
+        dataRows.push(buildRow(process, contracts[0], title, discharge));
       }
-      // Contratos adicionais recebem linha própria sem doc
       for (let i = 1; i < contracts.length; i++) {
-        rows.push(buildCSVRow(process, contracts[i], null, null));
+        dataRows.push(buildRow(process, contracts[i], null, null));
       }
     } else {
-      // Sem atrasos: cada contrato recebe 1 linha
       for (const contract of contracts) {
-        rows.push(buildCSVRow(process, contract, null, null));
+        dataRows.push(buildRow(process, contract, null, null));
       }
     }
   }
 
-  // Montar conteúdo CSV
-  const csvContent = [
-    headers.map(escapeCSVField).join(','),
-    ...rows.map(row => row.map(escapeCSVField).join(',')),
-  ].join('\r\n');
+  // Montar array de arrays com cabeçalho + dados
+  const sheetData = [headers, ...dataRows];
 
-  // UTF-8 BOM para compatibilidade com Excel (caracteres portugueses)
-  const BOM = '\uFEFF';
-  const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+  // Criar worksheet a partir do array
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  // Definir largura das colunas
+  ws['!cols'] = [
+    { wch: 8 },   // Filial
+    { wch: 10 },  // Código
+    { wch: 18 },  // Referência
+    { wch: 30 },  // Cliente
+    { wch: 10 },  // Incoterm
+    { wch: 12 },  // Taxa
+    { wch: 12 },  // Moeda
+    { wch: 16 },  // Vlr. Negociado
+    { wch: 16 },  // Vlr. Nacional
+    { wch: 14 },  // Documento
+    { wch: 14 },  // Vencimento
+    { wch: 14 },  // Baixa
+    { wch: 12 },  // Atraso (dias)
+  ];
+
+  // Congelar primeira linha (cabeçalho fixo)
+  if (!ws['!views']) ws['!views'] = [];
+  ws['!views'].push({ state: 'frozen', ySplit: 1 });
+
+  // Criar workbook e adicionar worksheet
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Relatório');
 
   // Disparar download
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `relatorio-contratos_${new Date().toISOString().split('T')[0]}.csv`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  const filename = `relatorio-contratos_${new Date().toISOString().split('T')[0]}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }

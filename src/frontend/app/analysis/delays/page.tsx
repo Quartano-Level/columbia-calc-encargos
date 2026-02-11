@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, TrendingDown, Clock, CheckCircle2, Info, X, FileDown, ChevronDown, ChevronRight } from "lucide-react";
 import { ProtectedRoute } from "@/components/protected-route";
 import { formatRate } from "@/lib/utils";
-import { exportDelaysCSV } from "@/lib/csv";
+import { exportDelaysXLSX } from "@/lib/csv";
 
 interface GroupedProcess {
     priCod: number;
@@ -255,8 +255,8 @@ export default function DelaysAnalysisPage() {
         printWindow.document.close();
     };
 
-    const exportToCSV = () => {
-        exportDelaysCSV({ processes: allProcesses });
+    const exportToXLSX = () => {
+        exportDelaysXLSX({ processes: allProcesses });
     };
 
     if (loading) {
@@ -353,10 +353,10 @@ export default function DelaysAnalysisPage() {
                         </h3>
                         <div className="flex items-center gap-3">
                             <button
-                                onClick={exportToCSV}
+                                onClick={exportToXLSX}
                                 className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"
                             >
-                                <FileDown size={14} /> Exportar CSV
+                                <FileDown size={14} /> Exportar Planilha
                             </button>
                             <button
                                 onClick={exportToPDF}
