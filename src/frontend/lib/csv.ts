@@ -19,23 +19,19 @@ function formatDateForExport(dateStr: string | number | null | undefined): strin
 }
 
 /**
- * Monta um array de 13 campos para uma linha da planilha.
- *
- * Colunas: Filial | Código | Referência | Cliente | Incoterm |
- *          Taxa | Moeda | Vlr. Negociado | Vlr. Nacional |
- *          Documento | Vencimento | Baixa | Atraso (dias)
+ * Monta array de 16 campos para a aba "Contratos"
  */
-function buildRow(
+function buildContratosRow(
   process: any,
   contract: any | null,
   title: any | null,
   discharge: any | null
 ): (string | number | null)[] {
-  const filCod = title?.filCod ?? contract?.filCod ?? '';
+  const filCod = title?.filCod ?? contract?.filCod ?? process?.filCod ?? '';
   const codigo = process.priCod || '';
   const referencia = process.priEspRefcliente || process.processNumber || String(process.priCod || '');
   const cliente = process.dpeNomPessoa || process.clientName || '';
-  const incoterm = process.incoterm || '';
+  const incoterm = process.incoterm || process.incEspSigla || '';
 
   const taxa = contract?.imcFltTxFec != null ? Number(contract.imcFltTxFec) : null;
   const moeda = contract?.moeEspNome || '';
@@ -46,11 +42,26 @@ function buildRow(
   let vencimento = '';
   let baixa = '';
   let atrasoDias: number | '' = '';
+  let valorDocumento: number | null = null;
+  let valorBaixado: number | null = null;
+  let valorEmAberto: number | null = null;
 
   if (title && discharge) {
-    documento = title.titEspNumero || title.docEspNumero || String(title.titCod || '');
+    // MUDANÇA: usar docCod ao invés de titEspNumero
+    documento = title.docCod || title.docEspNumero || String(title.titCod || '');
     vencimento = formatDateForExport(title.titDtaVencimento);
     baixa = formatDateForExport(discharge.borDtaMvto || discharge.bxaDtaBaixa);
+
+    // MUDANÇA: valorDocumento agora é o total da NF
+    valorDocumento = title.docMnyValor != null ? Number(title.docMnyValor) : null;
+
+    // NOVO: valorBaixado é o que estava em bxaMnyValor
+    valorBaixado = discharge.bxaMnyValor != null ? Number(discharge.bxaMnyValor) : null;
+
+    // NOVO: calcular valor em aberto
+    if (valorDocumento != null && valorBaixado != null) {
+      valorEmAberto = valorDocumento - valorBaixado;
+    }
 
     const dueDate = title.titDtaVencimento ? new Date(title.titDtaVencimento) : null;
     const paymentDateStr = discharge.borDtaMvto || discharge.bxaDtaBaixa;
@@ -67,83 +78,227 @@ function buildRow(
     filCod, codigo, referencia, cliente, incoterm,
     taxa, moeda, vlrNegociado, vlrNacional,
     documento, vencimento, baixa, atrasoDias,
+    valorDocumento, valorBaixado, valorEmAberto
   ];
 }
 
-export interface ExportDelaysParams {
-  processes: any[];
+/**
+ * Monta array de 12 campos para a aba "Encargos Financeiros"
+ * Agora inclui dados de títulos/baixas para contexto completo
+ */
+function buildEncargosRow(
+  process: any,
+  title: any | null,
+  discharge: any | null,
+  encargosFinanceiros: number
+): (string | number | null)[] {
+  const filCod = title?.filCod ?? process?.filCod ?? '';
+  const codigo = process.priCod || '';
+  const referencia = process.priEspRefcliente || process.processNumber || String(process.priCod || '');
+  const cliente = process.dpeNomPessoa || process.clientName || '';
+
+  let documento = '';
+  let valorDocumento: number | null = null;
+  let valorBaixado: number | null = null;
+  let vencimento = '';
+  let valorEmAberto: number | null = null;
+  let dataBaixa = '';
+  let diasAtraso: number | '' = '';
+
+  if (title && discharge) {
+    documento = title.docCod || title.docEspNumero || String(title.titCod || '');
+    valorDocumento = title.docMnyValor != null ? Number(title.docMnyValor) : null;
+    valorBaixado = discharge.bxaMnyValor != null ? Number(discharge.bxaMnyValor) : null;
+    vencimento = formatDateForExport(title.titDtaVencimento);
+    dataBaixa = formatDateForExport(discharge.borDtaMvto || discharge.bxaDtaBaixa);
+
+    // Calcular valor em aberto
+    if (valorDocumento != null && valorBaixado != null) {
+      valorEmAberto = valorDocumento - valorBaixado;
+    }
+
+    // Calcular dias em atraso
+    const dueDate = title.titDtaVencimento ? new Date(title.titDtaVencimento) : null;
+    const paymentDateStr = discharge.borDtaMvto || discharge.bxaDtaBaixa;
+    const paymentDate = paymentDateStr ? new Date(paymentDateStr) : null;
+
+    if (dueDate && paymentDate && paymentDate > dueDate) {
+      diasAtraso = Math.ceil(
+        Math.abs(paymentDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)
+      );
+    }
+  }
+
+  return [
+    filCod, codigo, referencia, cliente,
+    documento, valorDocumento, valorBaixado, encargosFinanceiros,
+    vencimento, valorEmAberto, dataBaixa, diasAtraso
+  ];
 }
 
-/** @deprecated Use exportDelaysXLSX instead */
-export const exportDelaysCSV = exportDelaysXLSX;
-
 /**
- * Gera XLSX com todos os contratos e dispara download.
- *
- * Lógica de mapeamento:
- * - Para cada processo, coleta documentos atrasados (paymentDate > dueDate)
- * - Se há documentos atrasados: primeiro contrato recebe 1 linha por doc atrasado;
- *   contratos adicionais recebem 1 linha com colunas de documento vazias
- * - Se não há documentos atrasados: cada contrato recebe 1 linha com colunas doc vazias
- * - Processos sem contratos: 1 linha com apenas info do processo
+ * Constrói array de arrays para a aba "Contratos"
+ * Retorna: [headers, ...dataRows]
  */
-export function exportDelaysXLSX({ processes }: ExportDelaysParams): void {
+function buildContratosSheetData(processes: any[]): (string | number | null)[][] {
   const headers = [
     'Filial', 'Código', 'Referência', 'Cliente', 'Incoterm',
     'Taxa', 'Moeda', 'Vlr. Negociado', 'Vlr. Nacional',
-    'Documento', 'Vencimento', 'Baixa', 'Atraso (dias)',
+    'Documento (NF)', 'Vencimento', 'Baixa', 'Atraso (dias)',
+    'Valor do Documento', 'Valor Baixado', 'Valor em Aberto'
   ];
 
   const dataRows: (string | number | null)[][] = [];
 
   for (const process of processes) {
     const contracts = process.contracts || [];
+
+    // Pular processos sem contratos
+    if (contracts.length === 0) continue;
+
     const titles = process.payments || [];
 
-    const delayedDischarges: Array<{ title: any; discharge: any }> = [];
-
+    // Coletar todas as baixas
+    const allDischarges: Array<{ title: any; discharge: any }> = [];
     for (const title of titles) {
-      const dueDate = title.titDtaVencimento ? new Date(title.titDtaVencimento) : null;
-      if (!dueDate) continue;
-
       for (const discharge of (title.discharges || [])) {
-        const paymentDateStr = discharge.borDtaMvto || discharge.bxaDtaBaixa;
-        const paymentDate = paymentDateStr ? new Date(paymentDateStr) : null;
-        if (paymentDate && paymentDate > dueDate) {
-          delayedDischarges.push({ title, discharge });
-        }
+        allDischarges.push({ title, discharge });
       }
     }
 
-    if (contracts.length === 0) {
-      if (delayedDischarges.length > 0) {
-        for (const { title, discharge } of delayedDischarges) {
-          dataRows.push(buildRow(process, null, title, discharge));
-        }
-      } else {
-        dataRows.push(buildRow(process, null, null, null));
+    if (allDischarges.length > 0) {
+      // Todas as baixas vão para o primeiro contrato
+      for (const { title, discharge } of allDischarges) {
+        dataRows.push(buildContratosRow(process, contracts[0], title, discharge));
       }
-    } else if (delayedDischarges.length > 0) {
-      for (const { title, discharge } of delayedDischarges) {
-        dataRows.push(buildRow(process, contracts[0], title, discharge));
-      }
+      // Demais contratos: linha sem informação de baixa
       for (let i = 1; i < contracts.length; i++) {
-        dataRows.push(buildRow(process, contracts[i], null, null));
+        dataRows.push(buildContratosRow(process, contracts[i], null, null));
       }
     } else {
+      // Tem contratos mas não tem baixas: uma linha por contrato
       for (const contract of contracts) {
-        dataRows.push(buildRow(process, contract, null, null));
+        dataRows.push(buildContratosRow(process, contract, null, null));
       }
     }
   }
 
-  // Montar array de arrays com cabeçalho + dados
-  const sheetData = [headers, ...dataRows];
+  return [headers, ...dataRows];
+}
 
-  // Criar worksheet a partir do array
+/**
+ * Constrói array de arrays para a aba "Encargos Financeiros"
+ * Nova lógica: inclui dados de títulos e baixas
+ */
+function buildEncargosSheetData(
+  processes: any[],
+  encargosByProcess: Record<string, number | null>
+): (string | number | null)[][] {
+  const headers = [
+    'Filial', 'Código', 'Referência', 'Cliente',
+    'Documento (NF)', 'Valor do Documento', 'Valor Baixado', 'Encargos Financeiros',
+    'Vencimento', 'Valor em Aberto', 'Data Baixa', 'Dias em Atraso'
+  ];
+
+  const dataRows: (string | number | null)[][] = [];
+
+  for (const process of processes) {
+    const priCod = String(process.priCod ?? '');
+    const encargos = encargosByProcess[priCod];
+
+    // Apenas processos com encargos
+    if (encargos == null || encargos === 0) continue;
+
+    const titles = process.payments || [];
+
+    // Coletar todas as baixas
+    const allDischarges: Array<{ title: any; discharge: any }> = [];
+    for (const title of titles) {
+      for (const discharge of (title.discharges || [])) {
+        allDischarges.push({ title, discharge });
+      }
+    }
+
+    if (allDischarges.length > 0) {
+      // Uma linha por baixa
+      for (const { title, discharge } of allDischarges) {
+        dataRows.push(buildEncargosRow(process, title, discharge, encargos));
+      }
+    } else {
+      // Sem baixas: linha só com dados de processo e encargos
+      dataRows.push(buildEncargosRow(process, null, null, encargos));
+    }
+  }
+
+  return [headers, ...dataRows];
+}
+
+/**
+ * Cria worksheet formatado para a aba "Contratos"
+ */
+function createContratosSheet(sheetData: (string | number | null)[][]): XLSX.WorkSheet {
   const ws = XLSX.utils.aoa_to_sheet(sheetData);
 
-  // Definir largura das colunas
+  // Formato financeiro brasileiro
+  const fmtFinanceiro = '#.##0,00';
+  const fmtReais = '"R$ "#.##0,00';
+
+  const colLetters = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P'];
+  const numRows = sheetData.length;
+
+  // Aplicar formatação nas colunas numéricas
+  for (let r = 1; r < numRows; r++) {
+    // Taxa (F, col 5)
+    const cTaxa = ws[colLetters[5] + (r + 1)];
+    if (cTaxa && (typeof cTaxa.v === 'number' || cTaxa.t === 'n')) {
+      cTaxa.z = fmtFinanceiro;
+      cTaxa.t = 'n';
+    }
+
+    // Vlr. Negociado (H, col 7)
+    const cVlrNeg = ws[colLetters[7] + (r + 1)];
+    if (cVlrNeg && (typeof cVlrNeg.v === 'number' || cVlrNeg.t === 'n')) {
+      cVlrNeg.z = fmtFinanceiro;
+      cVlrNeg.t = 'n';
+    }
+
+    // Vlr. Nacional (I, col 8) - Com R$
+    const cVlrNac = ws[colLetters[8] + (r + 1)];
+    if (cVlrNac && (typeof cVlrNac.v === 'number' || cVlrNac.t === 'n')) {
+      cVlrNac.z = fmtReais;
+      cVlrNac.t = 'n';
+    }
+
+    // Atraso (M, col 12) - Inteiro
+    const cAtraso = ws[colLetters[12] + (r + 1)];
+    if (cAtraso && (typeof cAtraso.v === 'number' || cAtraso.t === 'n')) {
+      cAtraso.z = '0';
+      cAtraso.t = 'n';
+    }
+
+    // NOVO: Valor do Documento (N, col 13)
+    const cValorDoc = ws[colLetters[13] + (r + 1)];
+    if (cValorDoc && (typeof cValorDoc.v === 'number' || cValorDoc.t === 'n')) {
+      cValorDoc.z = fmtReais;
+      cValorDoc.t = 'n';
+    }
+
+    // NOVO: Valor Baixado (O, col 14)
+    const cValorBaixado = ws[colLetters[14] + (r + 1)];
+    if (cValorBaixado && (typeof cValorBaixado.v === 'number' || cValorBaixado.t === 'n')) {
+      cValorBaixado.z = fmtReais;
+      cValorBaixado.t = 'n';
+    }
+
+    // NOVO: Valor em Aberto (P, col 15)
+    const cValorAberto = ws[colLetters[15] + (r + 1)];
+    if (cValorAberto && (typeof cValorAberto.v === 'number' || cValorAberto.t === 'n')) {
+      cValorAberto.z = fmtReais;
+      cValorAberto.t = 'n';
+    }
+  }
+
+  // Largura das colunas (16 colunas)
   ws['!cols'] = [
     { wch: 8 },   // Filial
     { wch: 10 },  // Código
@@ -154,21 +309,129 @@ export function exportDelaysXLSX({ processes }: ExportDelaysParams): void {
     { wch: 12 },  // Moeda
     { wch: 16 },  // Vlr. Negociado
     { wch: 16 },  // Vlr. Nacional
-    { wch: 14 },  // Documento
+    { wch: 14 },  // Documento (NF)
     { wch: 14 },  // Vencimento
     { wch: 14 },  // Baixa
     { wch: 12 },  // Atraso (dias)
+    { wch: 16 },  // Valor do Documento
+    { wch: 16 },  // Valor Baixado
+    { wch: 16 },  // Valor em Aberto
   ];
 
-  // Congelar primeira linha (cabeçalho fixo)
+  // Congelar cabeçalho
   if (!ws['!views']) ws['!views'] = [];
   ws['!views'].push({ state: 'frozen', ySplit: 1 });
 
-  // Criar workbook e adicionar worksheet
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Relatório');
+  return ws;
+}
 
-  // Disparar download
+/**
+ * Cria worksheet formatado para a aba "Encargos Financeiros"
+ */
+function createEncargosSheet(sheetData: (string | number | null)[][]): XLSX.WorkSheet {
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  // Formato financeiro brasileiro
+  const fmtFinanceiro = '#.##0,00';
+  const fmtReais = '"R$ "#.##0,00';
+
+  const colLetters = ['A','B','C','D','E','F','G','H','I','J','K','L'];
+  const numRows = sheetData.length;
+
+  // Aplicar formatação nas colunas numéricas
+  for (let r = 1; r < numRows; r++) {
+    // Valor do Documento (F, col 5)
+    const cValorDoc = ws[colLetters[5] + (r + 1)];
+    if (cValorDoc && (typeof cValorDoc.v === 'number' || cValorDoc.t === 'n')) {
+      cValorDoc.z = fmtReais;
+      cValorDoc.t = 'n';
+    }
+
+    // Valor Baixado (G, col 6)
+    const cValorBaixado = ws[colLetters[6] + (r + 1)];
+    if (cValorBaixado && (typeof cValorBaixado.v === 'number' || cValorBaixado.t === 'n')) {
+      cValorBaixado.z = fmtReais;
+      cValorBaixado.t = 'n';
+    }
+
+    // Encargos Financeiros (H, col 7)
+    const cEncargos = ws[colLetters[7] + (r + 1)];
+    if (cEncargos && (typeof cEncargos.v === 'number' || cEncargos.t === 'n')) {
+      cEncargos.z = fmtFinanceiro;
+      cEncargos.t = 'n';
+    }
+
+    // Valor em Aberto (J, col 9)
+    const cValorAberto = ws[colLetters[9] + (r + 1)];
+    if (cValorAberto && (typeof cValorAberto.v === 'number' || cValorAberto.t === 'n')) {
+      cValorAberto.z = fmtReais;
+      cValorAberto.t = 'n';
+    }
+
+    // Dias em Atraso (L, col 11)
+    const cDiasAtraso = ws[colLetters[11] + (r + 1)];
+    if (cDiasAtraso && (typeof cDiasAtraso.v === 'number' || cDiasAtraso.t === 'n')) {
+      cDiasAtraso.z = '0';
+      cDiasAtraso.t = 'n';
+    }
+  }
+
+  // Largura das colunas (12 colunas)
+  ws['!cols'] = [
+    { wch: 8 },   // Filial
+    { wch: 10 },  // Código
+    { wch: 18 },  // Referência
+    { wch: 30 },  // Cliente
+    { wch: 14 },  // Documento (NF)
+    { wch: 16 },  // Valor do Documento
+    { wch: 16 },  // Valor Baixado
+    { wch: 18 },  // Encargos Financeiros
+    { wch: 14 },  // Vencimento
+    { wch: 16 },  // Valor em Aberto
+    { wch: 14 },  // Data Baixa
+    { wch: 12 },  // Dias em Atraso
+  ];
+
+  // Congelar cabeçalho
+  if (!ws['!views']) ws['!views'] = [];
+  ws['!views'].push({ state: 'frozen', ySplit: 1 });
+
+  return ws;
+}
+
+export interface ExportDelaysParams {
+  processes: any[];
+  /** Mapa priCod -> valor de encargos financeiros (pidMnyValormn onde ctpDesNome = ENCARGOS FINANCEIROS) */
+  encargosByProcess?: Record<string, number | null>;
+}
+
+/** @deprecated Use exportDelaysXLSX instead */
+export const exportDelaysCSV = exportDelaysXLSX;
+
+/**
+ * Gera XLSX com duas abas separadas (Contratos e Encargos Financeiros) e dispara download.
+ *
+ * Estrutura:
+ * - Aba "Contratos": processos com contratos, incluindo baixas e atrasos
+ * - Aba "Encargos Financeiros": processos com encargos financeiros
+ */
+export function exportDelaysXLSX({ processes, encargosByProcess = {} }: ExportDelaysParams): void {
+  // 1. Construir dados das duas abas
+  const contratosData = buildContratosSheetData(processes);
+  const encargosData = buildEncargosSheetData(processes, encargosByProcess);
+
+  // 2. Criar workbook
+  const wb = XLSX.utils.book_new();
+
+  // 3. Criar e adicionar aba "Contratos"
+  const wsContratos = createContratosSheet(contratosData);
+  XLSX.utils.book_append_sheet(wb, wsContratos, 'Contratos');
+
+  // 4. Criar e adicionar aba "Encargos Financeiros"
+  const wsEncargos = createEncargosSheet(encargosData);
+  XLSX.utils.book_append_sheet(wb, wsEncargos, 'Encargos Financeiros');
+
+  // 5. Disparar download
   const filename = `relatorio-contratos_${new Date().toISOString().split('T')[0]}.xlsx`;
   XLSX.writeFile(wb, filename);
 }
