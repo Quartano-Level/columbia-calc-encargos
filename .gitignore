@@ -17,3 +17,4 @@ src/reference
 **/*.md
 **/*.csv
 **/*.xlsx
+.claude/
