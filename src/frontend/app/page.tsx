@@ -9,7 +9,9 @@ import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AuthErrorAlert } from "@/components/auth-error-alert";
 import { ProtectedRoute } from "@/components/protected-route";
-import { Search, Filter, FileText, Calendar, DollarSign, ChevronRight, AlertTriangle, TrendingDown } from "lucide-react";
+import { Search, Filter, FileText, Calendar, DollarSign, ChevronRight, AlertTriangle, TrendingDown, FileDown } from "lucide-react";
+import { fetchProcessesForExport, fetchEncargosFinanceirosByProcess } from "@/lib/api";
+import { exportDelaysXLSX } from "@/lib/csv";
 
 // Helper to map currency names to ISO codes for Intl.NumberFormat
 function getCurrencyCode(name: string): string {
@@ -46,7 +48,71 @@ export default function Home() {
 	const [authError, setAuthError] = useState<string | null>(null);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [sortBy, setSortBy] = useState<string>("recent");
+
+	const exportToXLSX = async () => {
+		try {
+			setExporting(true);
+
+			// Arrays agregados para todas as filiais
+			const allProcesses: any[] = [];
+			const allEncargosByProcess: Record<string, number | null> = {};
+
+			// Loop por todas as 7 filiais
+			for (let filCod = 1; filCod <= 7; filCod++) {
+				setExportStep(`Carregando filial ${filCod} de 7 - Buscando processos...`);
+				setExportProgress({ current: 0, total: 0 });
+
+				// Buscar processos da filial
+				const { processes: exportProcesses } = await fetchProcessesForExport(filCod);
+
+				console.log(`[Export] Filial ${filCod}: ${exportProcesses.length} processos encontrados`);
+
+				// Adicionar à lista agregada
+				allProcesses.push(...exportProcesses);
+
+				// Buscar encargos para cada processo desta filial
+				if (exportProcesses.length > 0) {
+					setExportStep(`Carregando filial ${filCod} de 7 - Buscando encargos...`);
+					setExportProgress({ current: 0, total: exportProcesses.length });
+
+					for (let i = 0; i < exportProcesses.length; i++) {
+						const p = exportProcesses[i];
+						const priCod = p.priCod ?? p.imcCod;
+						if (priCod != null) {
+							const valor = await fetchEncargosFinanceirosByProcess(Number(priCod));
+							allEncargosByProcess[String(priCod)] = valor;
+						}
+						setExportProgress({ current: i + 1, total: exportProcesses.length });
+					}
+				}
+			}
+
+			console.log(`[Export] Total agregado: ${allProcesses.length} processos de 7 filiais`);
+
+			if (allProcesses.length === 0) {
+				alert("Nenhum processo encontrado para exportar em nenhuma filial. Incluímos apenas processos com contratos ou encargos financeiros.");
+				return;
+			}
+
+			setExportStep("Gerando planilha com dados de todas as filiais...");
+			exportDelaysXLSX({ processes: allProcesses, encargosByProcess: allEncargosByProcess });
+			setExportStep(`Concluído! Relatório gerado com ${allProcesses.length} processos de 7 filiais.`);
+			await new Promise((r) => setTimeout(r, 1200));
+		} catch (err: any) {
+			console.error("Erro ao exportar planilha:", err);
+			const msg = err?.message || "Erro desconhecido";
+			setExportStep("");
+			alert(`Falha ao exportar planilha.\n\n${msg}\n\nVerifique se NEXT_PUBLIC_API_URL está configurado e se o backend está rodando.`);
+		} finally {
+			setExporting(false);
+			setExportStep("");
+			setExportProgress({ current: 0, total: 0 });
+		}
+	};
 	const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+	const [exporting, setExporting] = useState(false);
+	const [exportStep, setExportStep] = useState<string>("");
+	const [exportProgress, setExportProgress] = useState({ current: 0, total: 0 });
 	const router = useRouter();
 	const searchParams = useSearchParams();
 
@@ -245,7 +311,41 @@ export default function Home() {
 						<p className="text-gray-500 text-sm">Gerencie e calcule encargos financeiros por contrato</p>
 					</div>
 
-					{/* Stats Cards - Compact Version */}
+					<div className="flex items-center gap-3">
+						<button
+							onClick={exportToXLSX}
+							disabled={exporting}
+							className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"
+						>
+							<FileDown size={14} /> {exporting ? "Exportando..." : "Exportar Planilha"}
+						</button>
+						{/* Overlay de progresso da exportação */}
+						{exporting && (
+							<div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+								<div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full mx-4">
+									<div className="flex items-center gap-3 mb-4">
+										<Spinner className="w-8 h-8 text-[#337ab7]" />
+										<span className="font-bold text-gray-800">Exportando planilha</span>
+									</div>
+									<p className="text-sm text-gray-600 mb-3">{exportStep}</p>
+									{exportProgress.total > 0 && (
+										<div className="space-y-2">
+											<div className="flex justify-between text-xs text-gray-500">
+												<span>Processando</span>
+												<span>{exportProgress.current} / {exportProgress.total} processos</span>
+											</div>
+											<div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+												<div
+													className="h-full bg-[#337ab7] transition-all duration-300"
+													style={{ width: `${(exportProgress.current / exportProgress.total) * 100}%` }}
+												/>
+											</div>
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+						{/* Stats Cards - Compact Version */}
 					<div className="flex gap-3">
 						{stats.slice(0, 1).map((stat, idx) => {
 							const IconComponent = stat.icon;
@@ -267,6 +367,7 @@ export default function Home() {
 								</div>
 							);
 						})}
+					</div>
 					</div>
 				</div>
 
