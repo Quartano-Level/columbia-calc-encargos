@@ -101,7 +101,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     const titleLostInterest = processedDischarges.reduce((acc, d) => acc + d.lostInterest, 0);
 
     if (titleLostInterest > 0 && title.priCod === 82) {
-      console.log(`[Calculation DEBUG 82] Juros Perdidos detectados no título ${title.titEspNumero || title.docCod}: R$ ${titleLostInterest.toFixed(2)}`);
+      if (process.env.DEBUG_VERBOSE === '1') console.log(`[Calculation DEBUG 82] Juros Perdidos detectados no título ${title.titEspNumero || title.docCod}: R$ ${titleLostInterest.toFixed(2)}`);
     }
 
     return {
@@ -128,7 +128,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     }))
     : [];
 
-  console.log(`[orchestrateCalculation] Despesas mapped:`, despesasMap.length);
+  if (process.env.DEBUG_VERBOSE === '1') console.log(`[orchestrateCalculation] Despesas mapped:`, despesasMap.length);
 
   // Verificar se já existe lançamento de "ENCARGOS FINANCEIROS"
   const hasExistingInterest = despesasMap.some(d =>
@@ -136,7 +136,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     (d.tipo || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
   );
 
-  console.log(`[orchestrateCalculation] hasExistingInterest:`, hasExistingInterest);
+  if (process.env.DEBUG_VERBOSE === '1') console.log(`[orchestrateCalculation] hasExistingInterest:`, hasExistingInterest);
 
   const result: CalculationResult = {
     processId: processoId,
@@ -145,7 +145,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     cambio: {
       cdiAM: cdiDiario,
       txSpotCompra,
-      txFuturaVenc: txSpotCompra + cdiDiario,
+      txFuturaVenc: txSpotCompra,
       taxaDolarFiscal: Number(process?.imcFltTxFec) || 0,
       valorCIFbrl: cifTotal * (Number(process?.imcFltTxFec) || 1),
     },

@@ -2,18 +2,61 @@ import { Router } from 'express';
 
 const router = Router();
 
-// GET /processes
-
 import { conexosService } from '../services/conexos.js';
 import { supabase } from '../services/supabase.js';
 
-// GET /contracts - contratos de câmbio
-router.get('/contracts', async (_req, res) => {
+// Middleware de debug: log do path recebido (útil para verificar roteamento)
+router.use((req, _res, next) => {
+  if (req.path && (req.path.includes('all') || req.path.includes('for-export') || req.path.includes('with-contracts'))) {
+    if (process.env.DEBUG_VERBOSE === '1') console.log('[processes] Incoming:', req.method, req.path, '| baseUrl:', req.baseUrl);
+  }
+  next();
+});
+
+// ROTAS LITERAIS PRIMEIRO (antes de /:id) - senão /:id captura "all", "for-export", "with-contracts"
+// GET /processes/all - TODOS os processos (sem filtro de contratos) para exportação
+router.get('/all', async (_req, res) => {
   try {
-    const contracts = await conexosService.getContracts();
-    res.json({ source: 'conexos', data: contracts });
+    if (process.env.DEBUG_VERBOSE === '1') console.log('[processes/all] ✓ Buscando todos os processos');
+    const processes = await conexosService.getAllProcesses();
+    // Normalizar para formato esperado pela planilha (contracts e payments vazios)
+    const normalized = processes.map((p: any) => ({
+      ...p,
+      clientName: p.dpeNomPessoa || p.clientName || '',
+      processNumber: p.priEspRefcliente || p.processNumber || String(p.priCod || ''),
+      contracts: [],
+      payments: [],
+    }));
+    res.json({ source: 'conexos', data: { processes: normalized } });
   } catch (err: any) {
-    res.status(502).json({ error: 'Erro ao buscar contratos do Conexos', details: err.message });
+    console.error('[processes/all] Error:', err.message);
+    res.status(502).json({
+      error: 'Erro ao buscar processos',
+      details: err.message,
+    });
+  }
+});
+
+// GET /processes/for-export - legado (mantido para compatibilidade, usa lógica antiga)
+router.get('/for-export', async (req, res) => {
+  try {
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : 2;
+
+    if (isNaN(filCod) || filCod < 1 || filCod > 7) {
+      return res.status(400).json({
+        error: 'filCod inválido. Deve ser entre 1 e 7.'
+      });
+    }
+
+    if (process.env.DEBUG_VERBOSE === '1') console.log(`[processes/for-export] ✓ Rota executada (filCod=${filCod})`);
+    const result = await conexosService.getProcessesForExport(filCod);
+    res.json({ source: 'conexos', data: result });
+  } catch (err: any) {
+    console.error('[processes/for-export] Error:', err.message);
+    res.status(502).json({
+      error: 'Erro ao buscar processos para exportação',
+      details: err.message,
+    });
   }
 });
 
@@ -34,11 +77,21 @@ router.get('/with-contracts', async (_req, res) => {
   }
 });
 
+// GET /contracts - contratos de câmbio
+router.get('/contracts', async (_req, res) => {
+  try {
+    const contracts = await conexosService.getContracts();
+    res.json({ source: 'conexos', data: contracts });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Erro ao buscar contratos do Conexos', details: err.message });
+  }
+});
+
 // GET /processes - processos com possível relação a contratos
 router.get('/', async (req, res) => {
   try {
     const { priCod, refExterna } = req.query;
-    console.log('[processes route] Query params:', { priCod, refExterna });
+    if (process.env.DEBUG_VERBOSE === '1') console.log('[processes route] Query params:', { priCod, refExterna });
     const filters: { priCod?: string; priEspRefcliente?: string } = {};
 
     if (priCod && typeof priCod === 'string') {
@@ -48,7 +101,7 @@ router.get('/', async (req, res) => {
       filters.priEspRefcliente = refExterna;
     }
 
-    console.log('[processes route] Filters being passed:', filters);
+    if (process.env.DEBUG_VERBOSE === '1') console.log('[processes route] Filters being passed:', filters);
     const processes = await conexosService.getProcesses(Object.keys(filters).length > 0 ? filters : undefined);
 
     // Buscar cálculos existentes no Supabase
@@ -100,18 +153,57 @@ router.get('/:priCod/contracts', async (req, res) => {
   }
 });
 
+// GET /processes/:priCod/contracts/:imcCod/enriched - dados enriquecidos de um contrato
+router.get('/:priCod/contracts/:imcCod/enriched', async (req, res) => {
+  try {
+    const priCod = parseInt(req.params.priCod, 10);
+    const imcCod = parseInt(req.params.imcCod, 10);
+
+    if (isNaN(priCod) || isNaN(imcCod)) {
+      return res.status(400).json({ error: 'priCod ou imcCod inválido' });
+    }
+
+    const enriched = await conexosService.getEnrichedContractData(imcCod, priCod);
+    res.json({ source: 'conexos', data: enriched });
+  } catch (err: any) {
+    res.status(502).json({
+      error: 'Erro ao buscar contrato enriquecido',
+      details: err.message
+    });
+  }
+});
+
+// GET /processes/:id/expenses - despesas do processo (api/imp021/DespesasProcesso)
+router.get('/:id/expenses', async (req, res) => {
+  try {
+    const respExpenses = await conexosService.getDespesasByProcessId(req.params.id);
+    const expenses = Array.isArray(respExpenses) ? respExpenses : (respExpenses?.rows || []);
+    res.json({ source: 'conexos', data: expenses });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Erro ao buscar despesas do processo', details: err.message });
+  }
+});
+
 // GET /processes/:id
 router.get('/:id', async (req, res) => {
+  const id = req.params.id;
+  if (id === 'all' || id === 'for-export' || id === 'with-contracts') {
+    console.warn(`[processes] ROTA INCORRETA: /:id capturou "${id}" - a rota /${id} deveria ter sido usada. Verifique ordem das rotas.`);
+    return res.status(400).json({
+      error: 'Rota incorreta',
+      details: `Use GET /processes/${id} (sem segmento dinâmico). Possível conflito de rotas.`,
+    });
+  }
   try {
-    const processo = await conexosService.getProcessById(req.params.id);
+    const processo = await conexosService.getProcessById(id);
 
     // Tentar buscar parcelas/movimentos do Conexos e títulos financeiros (para vencimento real)
     let payments: any[] = [];
     let parcelsError: string | null = null;
     try {
-      const priCodNum = Number(req.params.id);
+      const priCodNum = Number(id);
       const [rawParcels, financialTitles] = await Promise.all([
-        conexosService.getParcelsByProcessId(req.params.id),
+        conexosService.getParcelsByProcessId(id),
         !isNaN(priCodNum) ? conexosService.getFinancialTitlesPsq015(priCodNum) : Promise.resolve([])
       ]);
 
@@ -129,7 +221,7 @@ router.get('/:id', async (req, res) => {
         };
 
         return {
-          id: p.pipCod ? String(p.pipCod) : `${req.params.id}-${idx}`,
+          id: p.pipCod ? String(p.pipCod) : `${id}-${idx}`,
           type: 'cambio',
           description: p.historico || p.descricao || p.hist || 'Parcela',
           value: Number(p.pipMnyValor || p.valorUSD || p.valor || 0) || 0,
@@ -143,7 +235,7 @@ router.get('/:id', async (req, res) => {
       });
     } catch (innerErr: any) {
       // Não quebrar a rota se a busca de parcelas falhar; apenas logar
-      console.warn('Failed to fetch parcels for process', req.params.id, innerErr?.message || innerErr);
+      console.warn('Failed to fetch parcels for process', id, innerErr?.message || innerErr);
       payments = [];
       parcelsError = innerErr?.response?.data ? JSON.stringify(innerErr.response.data) : (innerErr?.message || String(innerErr));
     }
@@ -151,10 +243,10 @@ router.get('/:id', async (req, res) => {
     // Buscar despesas já existentes no Conexos
     let expenses: any[] = [];
     try {
-      const respExpenses = await conexosService.getDespesasByProcessId(req.params.id);
+      const respExpenses = await conexosService.getDespesasByProcessId(id);
       expenses = Array.isArray(respExpenses) ? respExpenses : (respExpenses?.rows || []);
     } catch (expErr) {
-      console.warn('Failed to fetch expenses for process', req.params.id, expErr);
+      console.warn('Failed to fetch expenses for process', id, expErr);
     }
 
     // Normalizar processo para a forma esperada pelo frontend, mantendo os campos originais
@@ -164,7 +256,7 @@ router.get('/:id', async (req, res) => {
 
     // Buscar Incoterm via log009 (mesmo fluxo da tela principal)
     let incotermFromLog009 = null;
-    const priCod = Number(rawProcess?.priCod || req.params.id);
+    const priCod = Number(rawProcess?.priCod || id);
     if (priCod) {
       try {
         const invCod = await conexosService.getInvoiceCodeLog009(priCod);
@@ -180,7 +272,7 @@ router.get('/:id', async (req, res) => {
     const normalizedProcess = {
       // manter todos os campos originais para compatibilidade
       ...rawProcess,
-      id: String(rawProcess?.imcCod || rawProcess?.priCod || rawProcess?.id || req.params.id || ''),
+      id: String(rawProcess?.imcCod || rawProcess?.priCod || rawProcess?.id || id || ''),
       processNumber: rawProcess?.imcNumNumero || rawProcess?.priEspRefcliente || rawProcess?.priEspReferencia || rawProcess?.numero_processo || rawProcess?.priCod || '',
       clientName: rawProcess?.dpeNomPessoa || rawProcess?.dpeNomPessoaExp || rawProcess?.dpeNomPessoaCons || rawProcess?.clientName || '',
       incoterm: incotermFromLog009 || rawProcess?.incEspSigla || rawProcess?.incoterm || '',

@@ -1,5 +1,5 @@
 import axios, { AxiosInstance } from 'axios';
-import { boxLog } from '../utils/index.js';
+import { boxLog, DEBUG_VERBOSE } from '../utils/index.js';
 
 class ConexosService {
   private sid: string | null = null;
@@ -9,20 +9,20 @@ class ConexosService {
   constructor() {
     this.client = axios.create({
       baseURL: process.env.CONEXOS_BASE_URL || 'https://columbiatrading.conexos.cloud/api',
-      timeout: 10000,
+      timeout: 20000,
     });
   }
 
   private extractSidFromSetCookie(setCookie: string[] | undefined): string | null {
-    console.log('[Conexos] set-cookie header:', setCookie);
+    if (DEBUG_VERBOSE) console.log('[Conexos] set-cookie header:', setCookie);
     if (!setCookie) return null;
     const sidCookie = setCookie.find((c) => c.startsWith('sid='));
     if (!sidCookie) {
-      console.log('[Conexos] Nenhum cookie sid= encontrado');
+      if (DEBUG_VERBOSE) console.log('[Conexos] Nenhum cookie sid= encontrado');
       return null;
     }
     const sid = sidCookie.split(';')[0].replace('sid=', '');
-    console.log('[Conexos] SID extraído:', sid ? `${sid.substring(0, 10)}...` : 'vazio');
+    if (DEBUG_VERBOSE) console.log('[Conexos] SID extraído:', sid ? `${sid.substring(0, 10)}...` : 'vazio');
     return sid;
   }
 
@@ -30,7 +30,7 @@ class ConexosService {
     boxLog('Conexos: login attempt', { sessionToKill });
     const username = process.env.CONEXOS_USERNAME || 'MPS_FRANCINEI';
     const password = process.env.CONEXOS_PASSWORD || 'Abc123456@';
-    console.log('[Conexos] Tentando login...', sessionToKill ? `(matando sessão ${sessionToKill.substring(0, 8)}...)` : '');
+    if (DEBUG_VERBOSE) console.log('[Conexos] Tentando login...', sessionToKill ? `(matando sessão ${sessionToKill.substring(0, 8)}...)` : '');
 
     const body: { username: string; password: string; sessionToKill?: string } = { username, password };
     if (sessionToKill) {
@@ -39,12 +39,12 @@ class ConexosService {
 
     try {
       const resp = await this.client.post('/login', body);
-      console.log('[Conexos] Login response status:', resp.status);
-      console.log('[Conexos] Login response headers:', Object.keys(resp.headers));
+      if (DEBUG_VERBOSE) console.log('[Conexos] Login response status:', resp.status);
+      if (DEBUG_VERBOSE) console.log('[Conexos] Login response headers:', Object.keys(resp.headers));
       const sid = this.extractSidFromSetCookie(resp.headers['set-cookie']);
       if (!sid) throw new Error('Falha ao obter sid do login Conexos');
       this.sid = sid;
-      console.log('[Conexos] Login bem sucedido, sid armazenado');
+      if (DEBUG_VERBOSE) console.log('[Conexos] Login bem sucedido, sid armazenado');
       // Opcional: definir validade do sid (ex: 30min)
       this.sidExpiresAt = Date.now() + 25 * 60 * 1000;
     } catch (err: any) {
@@ -55,7 +55,7 @@ class ConexosService {
       // Tratar erro de max sessions
       const errorData = err.response?.data;
       if (errorData?.type === 'LOGIN_ERROR_MAX_SESSIONS' && Array.isArray(errorData.sessions) && !sessionToKill) {
-        console.log('[Conexos] Limite de sessões atingido. Encontrando sessão mais antiga para encerrar...');
+        if (DEBUG_VERBOSE) console.log('[Conexos] Limite de sessões atingido. Encontrando sessão mais antiga para encerrar...');
 
         // Encontrar a sessão mais antiga (menor sessionLastAccessedTime)
         const sessions = errorData.sessions as Array<{ sessionId: string; sessionLastAccessedTime: number }>;
@@ -63,7 +63,7 @@ class ConexosService {
           current.sessionLastAccessedTime < oldest.sessionLastAccessedTime ? current : oldest
         );
 
-        console.log('[Conexos] Encerrando sessão mais antiga:', oldestSession.sessionId,
+        if (DEBUG_VERBOSE) console.log('[Conexos] Encerrando sessão mais antiga:', oldestSession.sessionId,
           '(último acesso:', new Date(oldestSession.sessionLastAccessedTime).toISOString(), ')');
 
         // Refazer login matando a sessão mais antiga
@@ -101,35 +101,29 @@ class ConexosService {
     response?: { status: number; data?: any },
     error?: { status?: number; message?: string; data?: any }
   ) {
+    if (!DEBUG_VERBOSE) return;
     const timestamp = new Date().toISOString();
     const separator = '─'.repeat(60);
-
     console.log(`\n${separator}`);
     console.log(`📡 [${reqName}] ${method} ${url}`);
     console.log(`⏰ ${timestamp}`);
-
     if (payload) {
       console.log(`📤 Payload:`, JSON.stringify(payload, null, 2));
     }
-
     if (response) {
       console.log(`✅ Response Status: ${response.status}`);
       if (response.data) {
-        // Fragmentar response para evitar poluição
         const data = response.data;
-        // Mostrar primeiro item COMPLETO como amostra se existir
         if (Array.isArray(data.rows) && data.rows.length > 0) {
           console.log(`📥 Response: count=${data.count}, rowsCount=${data.rows.length}`);
           console.log(`📥 firstRow (completo):`, JSON.stringify(data.rows[0], null, 2));
         } else if (typeof data === 'object' && !Array.isArray(data) && !data.rows) {
-          // Se não for paginado, mostrar o objeto inteiro (GET de item único)
           console.log(`📥 Response Data:`, JSON.stringify(data, null, 2));
         } else {
           console.log(`📥 Response: count=${data.count}, rowsCount=${data.rows?.length || 0}`);
         }
       }
     }
-
     if (error) {
       console.log(`❌ Error Status: ${error.status || 'N/A'}`);
       console.log(`❌ Error Message: ${error.message}`);
@@ -137,11 +131,10 @@ class ConexosService {
         console.log(`❌ Error Data:`, JSON.stringify(error.data, null, 2));
       }
     }
-
     console.log(`${separator}\n`);
   }
 
-  async getContracts() {
+  async getContracts(filCod: number = 2) {
     await this.ensureSid();
     const body = {
       fieldList: [],
@@ -154,7 +147,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
+      'cnx-filcod': String(filCod),
       'cnx-usncod': '97',
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -250,9 +243,8 @@ class ConexosService {
       const resp = await this.client.post(url, body, { headers });
       // this.logRequest('getProcesses', 'POST', url, body, { status: resp.status, data: resp.data });
 
-      // Log dos campos úteis para a tabela da Home
       const rows = resp.data?.rows || [];
-      if (rows.length > 0) {
+      if (DEBUG_VERBOSE && rows.length > 0) {
         console.log('\n📊 [imp021] Campos de câmbio encontrados:');
         rows.forEach((row: any, index: number) => {
           console.log(`  [${index}] priCod: ${row.priCod}`);
@@ -261,7 +253,6 @@ class ConexosService {
           console.log(`      moeEspNomeConv (Moeda): ${row.moeEspNomeConv}`);
         });
       }
-
       return rows;
     } catch (err: any) {
       // this.logRequest('getProcesses', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
@@ -272,6 +263,52 @@ class ConexosService {
       }
       throw err;
     }
+  }
+
+  /** Retorna TODOS os processos (sem filtro de contratos) com paginação automática */
+  async getAllProcesses(pageSize = 500, filCod: number = 2) {
+    await this.ensureSid();
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': '97',
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    let allProcesses: any[] = [];
+    let pageNumber = 1;
+    let hasMorePages = true;
+
+    while (hasMorePages) {
+      const body = {
+        fieldList: [],
+        filterList: { "priVldStatus#IN": ["1"] },
+        pageNumber,
+        pageSize,
+        serviceName: "imp021",
+        orderList: { orderList: [{ propertyName: "priCod", order: "desc" }] }
+      };
+
+      const resp = await this.client.post('/imp021/list', body, { headers });
+      const rows = resp.data?.rows || [];
+      const count = resp.data?.count || 0;
+
+      allProcesses = allProcesses.concat(rows);
+
+      if (DEBUG_VERBOSE) {
+        console.log(`[getAllProcesses] Página ${pageNumber}: ${rows.length} processos (total acumulado: ${allProcesses.length}/${count})`);
+      }
+
+      // Se pegou menos que pageSize, não há mais páginas
+      // OU se já temos todos os processos (count)
+      hasMorePages = rows.length === pageSize && allProcesses.length < count;
+      pageNumber++;
+    }
+
+    console.log(`[getAllProcesses] ✓ Total de processos buscados: ${allProcesses.length}`);
+    return allProcesses;
   }
 
   async getParcelsByProcessId(processId: string) {
@@ -294,7 +331,7 @@ class ConexosService {
       if (err.response && err.response.status === 401) {
         await this.login();
         const retryResp = await this.client.post(`/log009/parcelas/list?imcCod=${processId}`, { headers });
-        console.log(retryResp.data, 1); // --- IGNORE ---
+        if (DEBUG_VERBOSE) console.log(retryResp.data, 1);
         return retryResp.data?.rows || retryResp.data;
       }
 
@@ -324,7 +361,7 @@ class ConexosService {
           // First attempt
           try {
             const postResp = await doPost([]);
-            console.log(postResp.data, 2); // --- IGNORE ---
+            if (DEBUG_VERBOSE) console.log(postResp.data, 2);
             return postResp.data?.rows || postResp.data || [];
           } catch (postErr: any) {
             // Inspect error to see if it's due to missing fields and retry without them once
@@ -347,7 +384,7 @@ class ConexosService {
 
               try {
                 const retryResp = await doPost(filtered);
-                console.log(retryResp.data, 3); // --- IGNORE ---
+                if (DEBUG_VERBOSE) console.log(retryResp.data, 3);
                 return retryResp.data?.rows || retryResp.data || [];
               } catch (postErr2: any) {
                 const postStatus2 = postErr2?.response?.status;
@@ -363,7 +400,7 @@ class ConexosService {
             // 1) Try empty fieldList (server may accept empty to return rows)
             try {
               const emptyResp = await doPost([]);
-              console.log(emptyResp.data, 4); // --- IGNORE ---
+              if (DEBUG_VERBOSE) console.log(emptyResp.data, 4);
               return emptyResp.data?.rows || emptyResp.data || [];
             } catch (emptyErr: any) {
               console.warn('Parcelas POST with empty fieldList failed', emptyErr?.response?.status, emptyErr?.response?.data || emptyErr.message);
@@ -379,7 +416,7 @@ class ConexosService {
                 orderList: { orderList: [{ propertyName: "pipCod", order: "desc" }] }
               };
               const altResp = await this.client.post('/log009/parcelas/list', bodyAlt, { headers });
-              console.log(altResp.data, 5); // --- IGNORE ---
+              if (DEBUG_VERBOSE) console.log(altResp.data, 5);
               return altResp.data?.rows || altResp.data || [];
             } catch (altErr: any) {
               console.warn('Parcelas POST with invCod#EQ failed', altErr?.response?.status, altErr?.response?.data || altErr.message);
@@ -395,7 +432,7 @@ class ConexosService {
                 orderList: { orderList: [{ propertyName: "pipCod", order: "desc" }] }
               };
               const altResp2 = await this.client.post('/log009/parcelas/list', bodyAlt2, { headers });
-              console.log(altResp2.data, 6); // --- IGNORE ---
+              if (DEBUG_VERBOSE) console.log(altResp2.data, 6);
               return altResp2.data?.rows || altResp2.data || [];
             } catch (altErr2: any) {
               console.warn('Parcelas POST with imcCod#EQ failed', altErr2?.response?.status, altErr2?.response?.data || altErr2.message);
@@ -440,32 +477,22 @@ class ConexosService {
     };
 
     const url = `/imp021/DespesasProcesso/${processId}`;
-    console.log(`[Conexos] Fetching expenses: GET ${url}`);
 
+    // API Conexos retorna 405 para GET nesta rota - usar POST diretamente
     try {
-      // Tentar GET conforme o exemplo de CURL do usuário
-      const resp = await this.client.get(url, { headers });
-      console.log(`[Conexos] GET ${url} Success. Data type:`, typeof resp.data, Array.isArray(resp.data) ? 'Array' : 'Object');
+      if (DEBUG_VERBOSE) console.log(`[Conexos] Fetching expenses: POST ${url}`);
+      const resp = await this.client.post(url, body, { headers });
       const data = resp.data?.rows || resp.data;
-      console.log(`[Conexos] Expenses found:`, Array.isArray(data) ? data.length : (data ? 1 : 0));
+      if (DEBUG_VERBOSE) console.log(`[Conexos] POST ${url} Success. Expenses found:`, Array.isArray(data) ? data.length : (data ? 1 : 0));
       return data;
     } catch (err: any) {
-      console.error(`[Conexos] GET ${url} failed:`, err.message);
+      console.error(`[Conexos] POST ${url} failed:`, err.message, err.response?.status);
       if (err.response && err.response.status === 401) {
         await this.login();
-        const retryResp = await this.client.get(url, { headers: { ...headers, ...this.getAuthHeaders() } });
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
         return retryResp.data?.rows || retryResp.data;
       }
-
-      // Se GET falhar, tentar POST como fallback (algumas rotas aceitam ambos com semânticas diferentes)
-      console.log(`[Conexos] Trying POST fallback for expenses...`);
-      try {
-        const resp = await this.client.post(url, body, { headers });
-        return resp.data?.rows || resp.data;
-      } catch (postErr: any) {
-        console.error(`[Conexos] POST fallback also failed:`, postErr.message);
-        throw postErr;
-      }
+      throw err;
     }
   }
 
@@ -507,27 +534,33 @@ class ConexosService {
     });
 
     const url = '/fin101/FinTaxasCDI/list';
-    console.log('\n========== CDI REQUEST DEBUG ==========');
-    console.log('URL:', url);
-    console.log('METHOD: POST');
-    console.log('PAYLOAD:', JSON.stringify(body, null, 2));
-    console.log('========================================\n');
+    if (DEBUG_VERBOSE) {
+      console.log('\n========== CDI REQUEST DEBUG ==========');
+      console.log('URL:', url);
+      console.log('METHOD: POST');
+      console.log('PAYLOAD:', JSON.stringify(body, null, 2));
+      console.log('========================================\n');
+    }
 
     try {
       const resp = await this.client.post(url, body, { headers: getHeaders() });
-      console.log('[CDI Response] Status:', resp.status);
-      console.log('[CDI Response] count:', resp.data?.count, 'rows:', resp.data?.rows?.length);
-      console.log('[CDI Response] Full data:', JSON.stringify(resp.data, null, 2));
+      if (DEBUG_VERBOSE) {
+        console.log('[CDI Response] Status:', resp.status);
+        console.log('[CDI Response] count:', resp.data?.count, 'rows:', resp.data?.rows?.length);
+        console.log('[CDI Response] Full data:', JSON.stringify(resp.data, null, 2));
+      }
       return resp.data;
     } catch (err: any) {
-      console.log('\n========== CDI ERROR DEBUG ==========');
-      console.log('[CDI Error] Status:', err.response?.status);
-      console.log('[CDI Error] Response:', JSON.stringify(err.response?.data, null, 2));
-      console.log('======================================\n');
+      if (DEBUG_VERBOSE) {
+        console.log('\n========== CDI ERROR DEBUG ==========');
+        console.log('[CDI Error] Status:', err.response?.status);
+        console.log('[CDI Error] Response:', JSON.stringify(err.response?.data, null, 2));
+        console.log('======================================\n');
+      }
 
       // If unauthorized, try to login and retry POST
       if (err.response && err.response.status === 401) {
-        console.log('[Conexos] 401 em getCDI, refazendo login...');
+        if (DEBUG_VERBOSE) console.log('[Conexos] 401 em getCDI, refazendo login...');
         await this.login();
         const retryResp = await this.client.post('/fin101/FinTaxasCDI/list', body, { headers: getHeaders() });
         return retryResp.data;
@@ -568,7 +601,7 @@ class ConexosService {
       return resp.data;
     } catch (err: any) {
       if (err.response && err.response.status === 401) {
-        console.log('[Conexos] 401 em getProcessById, refazendo login...');
+        if (DEBUG_VERBOSE) console.log('[Conexos] 401 em getProcessById, refazendo login...');
         await this.login();
         const retryResp = await this.client.get(`/imp021/${id}`, { headers: getHeaders() });
         return retryResp.data;
@@ -637,13 +670,10 @@ class ConexosService {
   async getProcessesWithContracts() {
     await this.ensureSid();
 
-    console.log('\n========== getProcessesWithContracts (Fluxo V2) ==========');
-
-    // 1. Buscar todos os contratos de câmbio
-    console.log('[1] Buscando contratos...');
+    if (DEBUG_VERBOSE) console.log('\n========== getProcessesWithContracts (Fluxo V2) ==========');
     const contracts = await this.getContracts();
     const contractsCount = contracts?.length || 0;
-    console.log('[1] Contratos encontrados:', contractsCount);
+    if (DEBUG_VERBOSE) console.log('[1] Contratos encontrados:', contractsCount);
 
     if (contractsCount === 0) {
       return { processes: [], contracts: [] };
@@ -654,9 +684,7 @@ class ConexosService {
     const processContractMap = new Map<number, any[]>();
     const allPriCods = new Set<number>();
 
-    console.log('[2] Buscando processos para cada contrato...');
-
-    // Executar em paralelo (com limite se necessário, aqui Promise.all para simplicidade dado volume baixo ~20)
+    if (DEBUG_VERBOSE) console.log('[2] Buscando processos para cada contrato...');
     const contractPromises = contracts.map(async (contract: any) => {
       if (!contract.imcCod) return;
 
@@ -679,19 +707,14 @@ class ConexosService {
     await Promise.all(contractPromises);
 
     const distinctProcessIds = Array.from(allPriCods);
-    console.log(`[2] Total de processos únicos identificados: ${distinctProcessIds.length}`);
-
+    if (DEBUG_VERBOSE) console.log(`[2] Total de processos únicos identificados: ${distinctProcessIds.length}`);
     if (distinctProcessIds.length === 0) {
       return { processes: [], contracts };
     }
-
-    // 3. Buscar detalhes completos dos processos
-    console.log('[3] Buscando detalhes dos processos em massa...');
+    if (DEBUG_VERBOSE) console.log('[3] Buscando detalhes dos processos em massa...');
     const processes = await this.getProcesses({ priCodIn: distinctProcessIds });
-    console.log(`[3] Detalhes recuperados: ${processes?.length || 0} processos`);
-
-    // 4. Enriquecer processos com dados do contrato
-    console.log('[4] Enriquecendo processos...');
+    if (DEBUG_VERBOSE) console.log(`[3] Detalhes recuperados: ${processes?.length || 0} processos`);
+    if (DEBUG_VERBOSE) console.log('[4] Enriquecendo processos...');
     const processesWithContracts = processes.map((proc: any) => {
       const priCod = Number(proc.priCod);
       const relatedContracts = processContractMap.get(priCod) || [];
@@ -720,23 +743,16 @@ class ConexosService {
   async getProcessesWithContractsEnriched() {
     await this.ensureSid();
 
-    console.log('\n========== getProcessesWithContracts (Enriched) ==========');
-
-    // 1. Buscar todos os contratos de câmbio
-    console.log('[1] Buscando contratos...');
+    if (DEBUG_VERBOSE) console.log('\n========== getProcessesWithContracts (Enriched) ==========');
     const contracts = await this.getContracts();
     const contractsCount = contracts?.length || 0;
-    console.log('[1] Contratos encontrados:', contractsCount);
-
+    if (DEBUG_VERBOSE) console.log('[1] Contratos encontrados:', contractsCount);
     if (contractsCount === 0) {
       return { processes: [], contracts: [] };
     }
-
-    // 2. Para cada contrato, buscar processos vinculados
     const processContractMap = new Map<number, any[]>();
     const allPriCods = new Set<number>();
-
-    console.log('[2] Buscando processos para cada contrato...');
+    if (DEBUG_VERBOSE) console.log('[2] Buscando processos para cada contrato...');
 
     const contractPromises = contracts.map(async (contract: any) => {
       if (!contract.imcCod) return;
@@ -756,19 +772,14 @@ class ConexosService {
     await Promise.all(contractPromises);
 
     const distinctProcessIds = Array.from(allPriCods);
-    console.log(`[2] Total de processos únicos identificados: ${distinctProcessIds.length}`);
-
+    if (DEBUG_VERBOSE) console.log(`[2] Total de processos únicos identificados: ${distinctProcessIds.length}`);
     if (distinctProcessIds.length === 0) {
       return { processes: [], contracts };
     }
-
-    // 3. Buscar detalhes básicos dos processos (imp021)
-    console.log('[3] Buscando basico dos processos (imp021)...');
+    if (DEBUG_VERBOSE) console.log('[3] Buscando basico dos processos (imp021)...');
     const processes = await this.getProcesses({ priCodIn: distinctProcessIds });
-    console.log(`[3] Processos básicos recuperados: ${processes?.length || 0}`);
-
-    // 4. Enriquecer processos com dados do contrato + log009 + psq015
-    console.log('[4] Enriquecendo processos (log009 + psq015)...');
+    if (DEBUG_VERBOSE) console.log(`[3] Processos básicos recuperados: ${processes?.length || 0}`);
+    if (DEBUG_VERBOSE) console.log('[4] Enriquecendo processos (log009 + psq015)...');
 
     const enrichedPromises = processes.map(async (proc: any) => {
       const priCod = Number(proc.priCod);
@@ -895,6 +906,141 @@ class ConexosService {
     };
   }
 
+  /**
+   * Processos para exportação da planilha:
+   * Inclui APENAS processos que tenham documento/vencimento/baixa OU encargos financeiros.
+   * - (A) Processos com contrato que tenham (docs em baixa OU encargos financeiros)
+   * - (B) Processos sem contrato mas com encargo financeiro
+   * Exclui: processos com contrato mas sem docs nem encargos; processos sem contrato nem encargos.
+   */
+  async getProcessesForExport(filCod: number = 2) {
+    await this.ensureSid();
+
+    console.log(`\n★★★ EXPORT PLANILHA (Filial ${filCod}) ★★★`);
+
+    // 1. Buscar TODOS os processos ativos (com paginação)
+    console.log('[getProcessesForExport] 1/4 Buscando todos os processos ativos...');
+    const allProcesses = await this.getAllProcesses(500, filCod);
+    console.log(`[getProcessesForExport] Total processos ativos: ${allProcesses.length}`);
+
+    // 2. Buscar TODOS os contratos e vincular aos processos (mesma estratégia da home)
+    console.log('[getProcessesForExport] 2/4 Buscando e vinculando contratos aos processos...');
+    const allContracts = await this.getContracts(filCod);
+
+    // Criar mapa priCod -> contratos usando API Conexos (mesmo método da home)
+    const contractsByProcess = new Map<number, any[]>();
+    const concurrencyLimitContracts = 20;
+
+    for (let i = 0; i < allContracts.length; i += concurrencyLimitContracts) {
+      const batch = allContracts.slice(i, i + concurrencyLimitContracts);
+
+      await Promise.all(batch.map(async (contract: any) => {
+        if (!contract.imcCod) return;
+
+        try {
+          // Buscar processos relacionados via API Conexos (mesmo que a home faz)
+          const relatedProcs = await this.getProcessesByContractId(contract.imcCod);
+
+          if (relatedProcs && relatedProcs.length > 0) {
+            relatedProcs.forEach((rp: any) => {
+              if (rp.priCod) {
+                const priCod = Number(rp.priCod);
+                if (!contractsByProcess.has(priCod)) {
+                  contractsByProcess.set(priCod, []);
+                }
+                contractsByProcess.get(priCod)!.push(contract);
+              }
+            });
+          }
+        } catch (err) {
+          // Ignorar erros individuais
+        }
+      }));
+
+      console.log(`[getProcessesForExport]   Vinculados ${Math.min(i + concurrencyLimitContracts, allContracts.length)}/${allContracts.length} contratos`);
+    }
+
+    console.log(`[getProcessesForExport] Total contratos: ${allContracts.length} | Processos com contratos: ${contractsByProcess.size}`);
+
+    // 3. Buscar despesas em paralelo (controle de concorrência: 20 por vez)
+    console.log('[getProcessesForExport] 3/4 Buscando despesas em paralelo...');
+    const expensesByProcess = new Map<number, any[]>();
+    const concurrencyLimit = 20;
+
+    for (let i = 0; i < allProcesses.length; i += concurrencyLimit) {
+      const batch = allProcesses.slice(i, i + concurrencyLimit);
+      const batchPromises = batch.map(async (process: any) => {
+        try {
+          const priCod = Number(process.priCod);
+          const despesas = await this.getDespesasByProcessId(String(priCod));
+          const rows = Array.isArray(despesas) ? despesas : (despesas?.rows || []);
+          if (rows.length > 0) {
+            expensesByProcess.set(priCod, rows);
+          }
+        } catch (err) {
+          // Ignora erros individuais
+        }
+      });
+      await Promise.all(batchPromises);
+      console.log(`[getProcessesForExport]   Processados ${Math.min(i + concurrencyLimit, allProcesses.length)}/${allProcesses.length}`);
+    }
+    console.log(`[getProcessesForExport] Processos com despesas: ${expensesByProcess.size}`);
+
+    // 4. Filtrar processos que têm contrato OU encargo + enriquecer dados
+    console.log('[getProcessesForExport] 4/4 Filtrando e enriquecendo processos...');
+    const processesForExport: any[] = [];
+    const excluded: any[] = [];
+
+    for (const process of allProcesses) {
+      const priCod = Number(process.priCod);
+      const contracts = contractsByProcess.get(priCod) || [];
+      const expenses = expensesByProcess.get(priCod) || [];
+
+      const hasEncargos = expenses.some((d: any) =>
+        (d.ctpDesNome || d.impDesNome || '').toUpperCase() === 'ENCARGOS FINANCEIROS'
+      );
+
+      // Incluir se tem contrato OU encargo
+      if (contracts.length > 0 || hasEncargos) {
+        // Buscar payments/titles apenas para processos com contratos
+        let payments: any[] = [];
+        if (contracts.length > 0) {
+          try {
+            const financialTitles = await this.getFinancialTitlesPsq015(priCod, filCod);
+            // Buscar baixas para cada título
+            const titlesWithDischarges = await Promise.all(
+              financialTitles.map(async (title: any) => {
+                const discharges = await this.getTitleDischargesPsq015(title, filCod);
+                return { ...title, discharges };
+              })
+            );
+            payments = titlesWithDischarges;
+          } catch (err) {
+            console.warn(`[getProcessesForExport] Erro ao buscar payments do processo ${priCod}:`, err);
+          }
+        }
+
+        processesForExport.push({
+          ...process,
+          contracts,
+          payments,
+          expenses,
+        });
+      } else {
+        excluded.push(priCod);
+      }
+    }
+
+    console.log(`[getProcessesForExport] ✓ Incluídos: ${processesForExport.length} processos`);
+    console.log(`[getProcessesForExport] ✗ Excluídos (sem contrato nem encargo): ${excluded.length} processos`);
+    if (excluded.length > 0 && excluded.length <= 10) {
+      console.log(`[getProcessesForExport]   priCods excluídos: ${excluded.join(', ')}`);
+    }
+    console.log('★★★ FIM EXPORT ★★★\n');
+
+    return { processes: processesForExport };
+  }
+
   async getInvoiceCodeLog009(priCod: number) {
     if (!priCod) return null;
     await this.ensureSid();
@@ -969,7 +1115,7 @@ class ConexosService {
     }
   }
 
-  async getFinancialTitlesPsq015(priCod: number) {
+  async getFinancialTitlesPsq015(priCod: number, filCod: number = 2) {
     if (!priCod) return [];
     await this.ensureSid();
 
@@ -988,7 +1134,7 @@ class ConexosService {
         "fPriCod#EQ": priCod,
         "vldSituacao#IN": ["1", "2"],
         "docVldPrevisao#EQ": "0",
-        "filCod#IN": [2]
+        "filCod#IN": [filCod]
       },
       pageNumber: 1,
       pageSize: "50",
@@ -1000,7 +1146,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
+      'cnx-filcod': String(filCod),
       'cnx-usncod': '97',
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -1011,9 +1157,9 @@ class ConexosService {
       const resp = await this.client.post(url, body, { headers });
       const rows = resp.data?.rows || [];
       if (priCod === 82) {
-        console.log(`[DEBUG 82] psq015: ${rows.length} títulos encontrados`);
+        if (DEBUG_VERBOSE) console.log(`[DEBUG 82] psq015: ${rows.length} títulos encontrados`);
         rows.forEach((r: any, i: number) => {
-          console.log(`[DEBUG 82] Título ${i + 1}: titCod=${r.titCod}, docCod=${r.docCod}, vencimento=${r.titDtaVencimento}, numero=${r.titEspNumero}`);
+          if (DEBUG_VERBOSE) console.log(`[DEBUG 82] Título ${i + 1}: titCod=${r.titCod}, docCod=${r.docCod}, vencimento=${r.titDtaVencimento}, numero=${r.titEspNumero}`);
         });
       }
       return rows;
@@ -1028,15 +1174,18 @@ class ConexosService {
     }
   }
 
-  async getTitleDischargesPsq015(title: any) {
+  async getTitleDischargesPsq015(title: any, filCod: number = 2) {
     if (!title || !title.filCod || !title.docCod || !title.titCod) return [];
 
     await this.ensureSid();
 
+    // Usa filCod do título (já vem correto) ou usa o parâmetro como fallback
+    const effectiveFilCod = title.filCod || filCod;
+
     const docTip = title.docTip ?? 1;
     // URL: /api/psq015/baixasTitulo/list/{filCod}/{docTip}/{docCod}/{titCod}/{vldCheck}
     // vldCheck é sempre 0 conforme instrução do usuário
-    const url = `/psq015/baixasTitulo/list/${title.filCod}/${docTip}/${title.docCod}/${title.titCod}/0`;
+    const url = `/psq015/baixasTitulo/list/${effectiveFilCod}/${docTip}/${title.docCod}/${title.titCod}/0`;
 
     const body = {
       fieldList: [],
@@ -1049,7 +1198,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
+      'cnx-filcod': String(effectiveFilCod),
       'cnx-usncod': '97',
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -1061,9 +1210,9 @@ class ConexosService {
 
       // Log específico para priCod 82 se conseguirmos identificar o priCod (passado no title)
       if (title.priCod === 82) {
-        console.log(`[DEBUG 82] baixasTitulo para titCod ${title.titCod}: ${rows.length} baixas`);
+        if (DEBUG_VERBOSE) console.log(`[DEBUG 82] baixasTitulo para titCod ${title.titCod}: ${rows.length} baixas`);
         rows.forEach((r: any, i: number) => {
-          console.log(`[DEBUG 82] Baixa ${i + 1}: borCod=${r.borCod}, borDtaMvto=${r.borDtaMvto}, valor=${r.bxaMnyValor}`);
+          if (DEBUG_VERBOSE) console.log(`[DEBUG 82] Baixa ${i + 1}: borCod=${r.borCod}, borDtaMvto=${r.borDtaMvto}, valor=${r.bxaMnyValor}`);
         });
       }
       return rows;
@@ -1083,6 +1232,142 @@ class ConexosService {
       }
       return [];
     }
+  }
+
+  /**
+   * Busca Taxa Ptax D.I da Declaração de Importação
+   * Fluxo: POST /imp019/list (filtro priCod) → cdiCod → POST /imp019/impDiPlanilha/list → plcFltTaxaFat
+   */
+  async getTaxaPtaxDI(priCod: number): Promise<number | null> {
+    await this.ensureSid();
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': '2',
+      'cnx-usncod': '97',
+      'cnx-datalanguage': 'pt',
+    };
+
+    try {
+      // Step 1: Buscar cdiCod
+      const step1Body = {
+        fieldList: ["cdiCod"],
+        filterList: { "priCod#EQ": priCod, "cdiVldValidproc#EQ": "1" },
+        pageNumber: 1,
+        pageSize: 1,
+        serviceName: "imp019",
+        orderList: { orderList: [{ propertyName: "cdiCod", order: "desc" }] }
+      };
+
+      const resp1 = await this.client.post('/imp019/list', step1Body, { headers });
+      const rows1 = resp1.data?.rows || [];
+      if (rows1.length === 0) {
+        if (DEBUG_VERBOSE) console.log(`[getTaxaPtaxDI] Nenhuma DI encontrada para priCod ${priCod}`);
+        return null;
+      }
+
+      const cdiCod = rows1[0].cdiCod;
+      if (!cdiCod) {
+        if (DEBUG_VERBOSE) console.log(`[getTaxaPtaxDI] cdiCod vazio para priCod ${priCod}`);
+        return null;
+      }
+
+      if (DEBUG_VERBOSE) console.log(`[getTaxaPtaxDI] priCod ${priCod} → cdiCod ${cdiCod}`);
+
+      // Step 2: Buscar plcFltTaxaFat
+      const step2Body = {
+        fieldList: ["plcFltTaxaFat"],
+        filterList: { "cdiCod": String(cdiCod), "cdiCodSeq": "0" },
+        pageNumber: 1,
+        pageSize: 1,
+        serviceName: "imp019.impDiPlanilha",
+      };
+
+      const resp2 = await this.client.post('/imp019/impDiPlanilha/list', step2Body, { headers });
+      const rows2 = resp2.data?.rows || [];
+
+      if (rows2.length === 0) {
+        if (DEBUG_VERBOSE) console.log(`[getTaxaPtaxDI] Nenhum registro de planilha para cdiCod ${cdiCod}`);
+        return null;
+      }
+
+      const taxaPtaxDI = Number(rows2[0].plcFltTaxaFat) || null;
+
+      if (DEBUG_VERBOSE) console.log(`[getTaxaPtaxDI] cdiCod ${cdiCod} → Taxa Ptax D.I: ${taxaPtaxDI}`);
+
+      return taxaPtaxDI;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        return this.getTaxaPtaxDI(priCod);
+      }
+      console.error(`[getTaxaPtaxDI] Erro ao buscar Taxa Ptax D.I para priCod ${priCod}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * Busca data de faturamento (emissão da Invoice/Proforma)
+   * Reutiliza métodos existentes: getInvoiceCodeLog009 → getProcessDetailsLog009
+   */
+  async getDataFaturamento(priCod: number): Promise<string | null> {
+    await this.ensureSid();
+
+    const invCod = await this.getInvoiceCodeLog009(priCod);
+    if (!invCod) {
+      if (DEBUG_VERBOSE) console.log(`[getDataFaturamento] Nenhum invCod para priCod ${priCod}`);
+      return null;
+    }
+
+    const details = await this.getProcessDetailsLog009(invCod);
+    if (!details?.docDtaEmissao) {
+      if (DEBUG_VERBOSE) console.log(`[getDataFaturamento] docDtaEmissao não disponível para invCod ${invCod}`);
+      return null;
+    }
+
+    // Converter timestamp para ISO date
+    const emissionDate = new Date(details.docDtaEmissao).toISOString().split('T')[0];
+
+    if (DEBUG_VERBOSE) console.log(`[getDataFaturamento] priCod ${priCod} → Data Faturamento: ${emissionDate}`);
+
+    return emissionDate;
+  }
+
+  /**
+   * Busca dados enriquecidos de um contrato específico incluindo:
+   * - Dados básicos do contrato (imp059)
+   * - Taxa Ptax D.I (imp019)
+   * - Data de faturamento (log009)
+   * @param imcCod Código do contrato
+   * @param priCod Código do processo (para buscar dados relacionados)
+   */
+  async getEnrichedContractData(imcCod: number, priCod: number): Promise<any> {
+    await this.ensureSid();
+
+    // Buscar contrato base
+    const contracts = await this.getContractsByProcess(priCod);
+    const contract = contracts.find((c: any) => c.imcCod === imcCod);
+
+    if (!contract) {
+      throw new Error(`Contrato ${imcCod} não encontrado para processo ${priCod}`);
+    }
+
+    // Buscar dados adicionais em paralelo
+    const [taxaPtaxDI, dataFaturamento] = await Promise.all([
+      this.getTaxaPtaxDI(priCod),
+      this.getDataFaturamento(priCod),
+    ]);
+
+    return {
+      ...contract,
+      // Dados enriquecidos
+      taxaPtaxDI,
+      dataFaturamento,
+      // Campos calculados
+      isAVista: contract.imcFltTxFec && contract.imcFltTxFec > 0,
+      isAPrazo: !contract.imcFltTxFec || contract.imcFltTxFec === 0,
+    };
   }
 
   async submitExpense(data: {

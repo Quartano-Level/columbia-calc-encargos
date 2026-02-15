@@ -12,8 +12,12 @@ export function logEvent(event: string, data: any) {
   console.log(`[${new Date().toISOString()}] ${event}:`, data);
 }
 
-// Logging estético e organizado
+// Quando true, exibe logs verbosos (boxLog, etapas de fluxo, etc). Por padrão false para não poluir o terminal.
+export const DEBUG_VERBOSE = process.env.DEBUG_VERBOSE === '1' || process.env.DEBUG_VERBOSE === 'true';
+
+// Logging estético e organizado (só exibe quando DEBUG_VERBOSE=1)
 export function boxLog(title: string, data: any) {
+  if (!DEBUG_VERBOSE) return;
   const line = "=".repeat(50);
   console.log(`\n${line}`);
   console.log(`[ ${title.toUpperCase()} ]`);
