@@ -3,6 +3,7 @@ import { boxLog } from '../utils/index.js';
 import type { BCBRateEntry, NormalizedRate, AnnualizedCDI } from '../types/index.js';
 
 const CDI_SERIES = 12;
+const PTAX_VENDA_SERIES = 10813;
 const BUSINESS_DAYS_YEAR = 252;
 
 class BCBService {
@@ -53,7 +54,7 @@ class BCBService {
     const cacheKey = `${seriesId}:${startDate}:${endDate}`;
     const cached = this.getCached<NormalizedRate[]>(cacheKey, this.CACHE_TTL_HISTORICAL);
     if (cached) {
-      console.log(`[BCB] Cache hit: ${cacheKey}`);
+      if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Cache hit: ${cacheKey}`);
       return cached;
     }
 
@@ -79,7 +80,7 @@ class BCBService {
     normalized.sort((a, b) => a.date.localeCompare(b.date));
 
     this.setCache(cacheKey, normalized);
-    console.log(`[BCB] Fetched ${normalized.length} records for series ${seriesId} (${startDate} → ${endDate})`);
+    if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Fetched ${normalized.length} records for series ${seriesId} (${startDate} → ${endDate})`);
     return normalized;
   }
 
@@ -100,7 +101,7 @@ class BCBService {
     const cacheKey = `latest:${CDI_SERIES}`;
     const cached = this.getCached<AnnualizedCDI>(cacheKey, this.CACHE_TTL_LATEST);
     if (cached) {
-      console.log(`[BCB] Cache hit: ${cacheKey}`);
+      if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Cache hit: ${cacheKey}`);
       return cached;
     }
 
@@ -127,7 +128,7 @@ class BCBService {
     };
 
     this.setCache(cacheKey, result);
-    console.log(`[BCB] Latest CDI: ${result.annualRate}% a.a. (${result.date})`);
+    if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Latest CDI: ${result.annualRate}% a.a. (${result.date})`);
     return result;
   }
 
@@ -160,6 +161,76 @@ class BCBService {
     }
 
     return { factor, days: rates.length };
+  }
+
+  /**
+   * Busca taxa Ptax venda (USD/BRL) para data específica.
+   * Se a data cair em fim de semana/feriado, retorna o último valor disponível.
+   * @param date YYYY-MM-DD
+   * @returns Taxa Ptax venda do dia (ou mais recente disponível)
+   */
+  async getPtaxVenda(date: string): Promise<number> {
+    const cacheKey = `ptax-venda:${date}`;
+    const cached = this.getCached<number>(cacheKey, this.CACHE_TTL_HISTORICAL);
+    if (cached) {
+      if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Cache hit: ${cacheKey}`);
+      return cached;
+    }
+
+    // Buscar até 7 dias antes para garantir que pegamos a última Ptax disponível
+    const startDate = new Date(date);
+    startDate.setDate(startDate.getDate() - 7);
+    const startIso = startDate.toISOString().split('T')[0];
+
+    const rates = await this.getSeriesData(PTAX_VENDA_SERIES, startIso, date);
+
+    if (rates.length === 0) {
+      throw new Error(`Nenhuma taxa Ptax venda encontrada para ${date}`);
+    }
+
+    // Retornar a taxa mais recente (última do array ordenado)
+    const latestRate = rates[rates.length - 1].dailyRate;
+    this.setCache(cacheKey, latestRate);
+
+    if (process.env.DEBUG_VERBOSE === '1') {
+      console.log(`[BCB] Ptax venda para ${date}: ${latestRate} (data: ${rates[rates.length - 1].date})`);
+    }
+
+    return latestRate;
+  }
+
+  /**
+   * Busca a taxa Ptax venda mais recente.
+   */
+  async getLatestPtaxVenda(): Promise<{ date: string; rate: number }> {
+    const cacheKey = `latest:${PTAX_VENDA_SERIES}`;
+    const cached = this.getCached<{ date: string; rate: number }>(cacheKey, this.CACHE_TTL_LATEST);
+    if (cached) {
+      if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Cache hit: ${cacheKey}`);
+      return cached;
+    }
+
+    const url = `/bcdata.sgs.${PTAX_VENDA_SERIES}/dados/ultimos/1?formato=json`;
+    boxLog('BCB: getLatestPtaxVenda', { url });
+
+    const resp = await this.client.get<BCBRateEntry[]>(url);
+    const raw = Array.isArray(resp.data) ? resp.data : [];
+
+    if (raw.length === 0) {
+      throw new Error('BCB retornou array vazio para última Ptax venda');
+    }
+
+    const entry = raw[0];
+    const rate = parseFloat(entry.valor);
+
+    const result = {
+      date: this.parseDateBCB(entry.data),
+      rate,
+    };
+
+    this.setCache(cacheKey, result);
+    if (process.env.DEBUG_VERBOSE === '1') console.log(`[BCB] Latest Ptax venda: ${rate} (${result.date})`);
+    return result;
   }
 }
 

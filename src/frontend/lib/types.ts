@@ -119,3 +119,46 @@ export interface BackendCalculationResponse {
 	}>;
 	summary?: any;
 }
+
+/** Enriched contract data with additional fields from Conexos and flags */
+export interface EnrichedContractData {
+	imcCod: number;
+	imcDtaFechamento: string | number;
+	imcFltTxFec: number | null;
+	vlrMneg: number;
+	vlrTotalNac: number;
+	moeEspNome: string;
+	priCod: number;
+	taxaPtaxDI: number | null;
+	dataFaturamento: string | null;
+	isAVista: boolean;
+	isAPrazo: boolean;
+}
+
+/** Calculator form state for the new 3-deck structure */
+export interface CalculatorFormState {
+	// Deck 1: Process Info
+	refExterna: string;
+	nomeCliente: string;
+	incoterm: string;
+	moedaNegociada: string;
+	valorMoedaNegociada: number;
+	valorMoedaNacional: number;
+
+	// Deck 2: Contract Info
+	dataFechamento: string;
+	dataFaturamento: string;
+	prazoEmDias: number; // INPUT
+	vencimentoCliente: string; // calculated
+
+	// Deck 3: Rates
+	taxaFechamento: number | null;
+	taxaPtaxDI: number | null;
+	taxaSpotDoDia: number | null; // BCB
+	taxaSpotNegociada: number | null; // INPUT
+	taxaFutura: number | null; // INPUT
+
+	// Calculation
+	cdiAoAno: number | null;
+	encargosCalculados: number;
+}

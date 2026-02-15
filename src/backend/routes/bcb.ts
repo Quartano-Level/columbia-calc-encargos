@@ -49,4 +49,31 @@ router.get('/cdi/accumulated', async (req: Request, res: Response) => {
   }
 });
 
+/** GET /bcb/ptax-venda/latest — Última taxa Ptax venda */
+router.get('/ptax-venda/latest', async (_req: Request, res: Response) => {
+  try {
+    const data = await bcbService.getLatestPtaxVenda();
+    res.json({ source: 'bcb', data });
+  } catch (err: any) {
+    console.error('[BCB Route] /ptax-venda/latest error:', err.message);
+    res.status(502).json({ error: 'Falha ao buscar Ptax venda do Banco Central', details: err.message });
+  }
+});
+
+/** GET /bcb/ptax-venda?date=YYYY-MM-DD — Taxa Ptax venda para data específica */
+router.get('/ptax-venda', async (req: Request, res: Response) => {
+  try {
+    const { date } = req.query;
+    if (!date) {
+      res.status(400).json({ error: 'Parâmetro date é obrigatório (formato YYYY-MM-DD)' });
+      return;
+    }
+    const rate = await bcbService.getPtaxVenda(String(date));
+    res.json({ source: 'bcb', data: { date: String(date), rate } });
+  } catch (err: any) {
+    console.error('[BCB Route] /ptax-venda error:', err.message);
+    res.status(502).json({ error: 'Falha ao buscar taxa Ptax venda do Banco Central', details: err.message });
+  }
+});
+
 export default router;

@@ -81,6 +81,58 @@ export async function fetchProcessesWithContracts(): Promise<ProcessesWithContra
 	return data?.data || { processes: [], contracts: [], totalProcesses: 0, totalContracts: 0 };
 }
 
+/** TODOS os processos (sem filtro de contratos) - para exportação da planilha */
+export async function fetchAllProcesses(): Promise<{ processes: any[] }> {
+	const url = `${API_BASE_URL}/processes/all`;
+	if (!API_BASE_URL) {
+		throw new Error("NEXT_PUBLIC_API_URL não configurado. Configure a variável de ambiente apontando para o backend (ex: http://localhost:3001).");
+	}
+	const response = await fetch(url, {
+		method: "GET",
+		headers: { "Accept": "application/json" },
+	});
+	if (!response.ok) {
+		let errMsg = `API Error: ${response.status}`;
+		try {
+			const body = await response.json();
+			if (body?.error) errMsg = body.error;
+			if (body?.details) errMsg += ` - ${body.details}`;
+		} catch {
+			// ignora se body não for JSON
+		}
+		throw new Error(errMsg);
+	}
+	const data = await response.json();
+	return data?.data || { processes: [] };
+}
+
+/** Processos para exportação: docs em baixa OU sem contrato mas com encargo financeiro (legado) */
+export async function fetchProcessesForExport(filCod?: number): Promise<{ processes: any[] }> {
+	const url = filCod
+		? `${API_BASE_URL}/processes/for-export?filCod=${filCod}`
+		: `${API_BASE_URL}/processes/for-export`;
+	if (!API_BASE_URL) {
+		throw new Error("NEXT_PUBLIC_API_URL não configurado. Configure a variável de ambiente apontando para o backend (ex: http://localhost:3001).");
+	}
+	const response = await fetch(url, {
+		method: "GET",
+		headers: { "Accept": "application/json" },
+	});
+	if (!response.ok) {
+		let errMsg = `API Error: ${response.status}`;
+		try {
+			const body = await response.json();
+			if (body?.error) errMsg = body.error;
+			if (body?.details) errMsg += ` - ${body.details}`;
+		} catch {
+			// ignora se body não for JSON
+		}
+		throw new Error(errMsg);
+	}
+	const data = await response.json();
+	return data?.data || { processes: [] };
+}
+
 
 export async function fetchProcess(id: string): Promise<{ process: Process; payments: Payment[] }> {
 	const response = await fetch(`${API_BASE_URL}/processes/${id}`, {
@@ -112,6 +164,27 @@ export async function fetchContractsByProcess(priCod: number): Promise<any[]> {
 	const data = await response.json();
 	// backend returns { source: 'conexos', data: contracts }
 	return data?.data || [];
+}
+
+/** Retorna o valor de encargos financeiros do processo (pidMnyValormn onde ctpDesNome = 'ENCARGOS FINANCEIROS') */
+export async function fetchEncargosFinanceirosByProcess(priCod: number): Promise<number | null> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/expenses`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return null;
+		const data = await response.json();
+		const expenses = Array.isArray(data?.data) ? data.data : (data?.data?.rows || []);
+		const encargosRow = expenses.find(
+			(d: any) => (d.ctpDesNome || d.impDesNome || '').toUpperCase() === 'ENCARGOS FINANCEIROS'
+		);
+		return encargosRow != null && encargosRow.pidMnyValormn != null
+			? Number(encargosRow.pidMnyValormn)
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 export async function fetchCDI(startDate?: string, endDate?: string): Promise<any[]> {
@@ -191,6 +264,47 @@ export async function fetchBCBLatestCDI(): Promise<BCBAnnualizedCDI | null> {
 	} catch {
 		return null;
 	}
+}
+
+/** Fetch latest Ptax venda rate from BCB */
+export async function fetchBCBLatestPtaxVenda(): Promise<{ date: string; rate: number } | null> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/bcb/ptax-venda/latest`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return null;
+		const data = await response.json();
+		return data?.data || null;
+	} catch {
+		return null;
+	}
+}
+
+/** Fetch Ptax venda rate for a specific date from BCB */
+export async function fetchBCBPtaxVenda(date: string): Promise<number | null> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/bcb/ptax-venda?date=${date}`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return null;
+		const data = await response.json();
+		return data?.data?.rate || null;
+	} catch {
+		return null;
+	}
+}
+
+/** Fetch enriched contract data (with Taxa Ptax DI, dataFaturamento, flags) */
+export async function fetchEnrichedContractData(priCod: number, imcCod: number): Promise<any> {
+	const response = await fetch(`${API_BASE_URL}/processes/${priCod}/contracts/${imcCod}/enriched`, {
+		method: "GET",
+		headers: { "Accept": "application/json" },
+	});
+	if (!response.ok) throw new Error(`API Error: ${response.status}`);
+	const data = await response.json();
+	return data?.data || null;
 }
 
 export async function submitToConexos(id: string, result: CalculationResult & { clientName: string }): Promise<{ success: boolean; message: string }> {
