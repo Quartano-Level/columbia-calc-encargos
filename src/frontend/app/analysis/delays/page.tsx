@@ -1,14 +1,13 @@
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
-import { fetchProcessesWithContracts, fetchCDI, ProcessWithContract } from "@/lib/api";
+import { fetchProcessesWithContracts, fetchCDI } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, TrendingDown, Clock, CheckCircle2, Info, X, FileDown, ChevronDown, ChevronRight } from "lucide-react";
 import { ProtectedRoute } from "@/components/protected-route";
 import { formatRate } from "@/lib/utils";
-import { exportDelaysXLSX } from "@/lib/csv";
 
 interface GroupedProcess {
     priCod: number;
@@ -255,10 +254,6 @@ export default function DelaysAnalysisPage() {
         printWindow.document.close();
     };
 
-    const exportToXLSX = () => {
-        exportDelaysXLSX({ processes: allProcesses });
-    };
-
     if (loading) {
         return (
             <div className="flex items-center justify-center min-h-[calc(100vh-5rem)]">
@@ -352,12 +347,6 @@ export default function DelaysAnalysisPage() {
                             Ranking de Processos Críticos
                         </h3>
                         <div className="flex items-center gap-3">
-                            <button
-                                onClick={exportToXLSX}
-                                className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"
-                            >
-                                <FileDown size={14} /> Exportar Planilha
-                            </button>
                             <button
                                 onClick={exportToPDF}
                                 className="flex items-center gap-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs px-3 py-2 rounded transition-colors"

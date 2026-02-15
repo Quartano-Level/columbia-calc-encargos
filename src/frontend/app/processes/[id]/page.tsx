@@ -2,60 +2,24 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Process, Payment, CalculationResult } from "@/lib/types";
-import { fetchProcess, fetchCDI, calculateCharges, submitToConexos, fetchContractsByProcess, fetchBCBLatestCDI } from "@/lib/api";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Process, CalculationResult, EnrichedContractData, CalculatorFormState } from "@/lib/types";
+import {
+	fetchProcess,
+	fetchContractsByProcess,
+	fetchEnrichedContractData,
+	fetchBCBLatestCDI,
+	fetchBCBPtaxVenda,
+	calculateCharges,
+	submitToConexos,
+} from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import { ProtectedRoute } from "@/components/protected-route";
-import { Calendar } from "@/components/ui/calendar";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon } from "lucide-react";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
-
-// Helper to map currency names to ISO codes for Intl.NumberFormat
-function getCurrencyCode(name: string): string {
-	const upperName = (name || "").toUpperCase();
-	if (upperName.includes("DOLAR") || upperName.includes("USD")) return "USD";
-	if (upperName.includes("EURO") || upperName.includes("EUR")) return "EUR";
-	if (upperName.includes("REAL") || upperName.includes("BRL")) return "BRL";
-	if (upperName.includes("LIBRA") || upperName.includes("GBP")) return "GBP";
-	return "USD";
-}
-
-// Helper to format rates (CDI, Spot, etc.)
-// 5 -> 5,0; 0,0551310000 -> 0,055131
-function formatRate(value: number | string | undefined | null): string {
-	const num = typeof value === 'string' ? parseFloat(value) : Number(value);
-	if (isNaN(num)) return "0,0";
-
-	return new Intl.NumberFormat("pt-BR", {
-		minimumFractionDigits: 1,
-		maximumFractionDigits: 10,
-	}).format(num);
-}
-
-// Helper to format currency for input (1000 -> 1.000,00)
-function formatCurrencyInput(value: string | number): string {
-	const num = typeof value === 'string' ? parseFloat(value.replace(/\./g, '').replace(',', '.')) : Number(value);
-	if (isNaN(num)) return "";
-	return new Intl.NumberFormat("pt-BR", {
-		minimumFractionDigits: 2,
-		maximumFractionDigits: 2,
-	}).format(num);
-}
-
-// Helper to parse currency input back to number
-function parseCurrencyInput(value: string): number {
-	const cleanValue = value.replace(/\./g, "").replace(",", ".");
-	return parseFloat(cleanValue) || 0;
-}
+import { ArrowLeft } from "lucide-react";
 
 export default function ProcessCalculatorPage() {
 	const params = useParams();
@@ -64,1450 +28,665 @@ export default function ProcessCalculatorPage() {
 	const processId = params.id as string;
 	const contractIdParam = searchParams.get('contractId');
 
+	// State
 	const [process, setProcess] = useState<Process | null>(null);
-	const [payments, setPayments] = useState<Payment[]>([]);
 	const [contracts, setContracts] = useState<any[]>([]);
-	const [selectedContract, setSelectedContract] = useState<any | null>(null);
+	const [selectedContract, setSelectedContract] = useState<EnrichedContractData | null>(null);
 	const [loading, setLoading] = useState(true);
-	const [loadingContracts, setLoadingContracts] = useState(true);
 	const [calculating, setCalculating] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
+	const [loadingBCBCDI, setLoadingBCBCDI] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [result, setResult] = useState<CalculationResult | null>(null);
-	const [parcelsError, setParcelsError] = useState<string | null>(null);
 
-	// Form state - INPUTS MANUAIS (conforme planilha Excel)
-	const [prazo, setPrazo] = useState<Date | undefined>(undefined); // Prazo agora é DatePicker
-	const [dias, setDias] = useState<number>(0); // Dias calculado automaticamente
-	const [vencCambioOuFornec, setVencCambioOuFornec] = useState("");
-	const [vencAlongamento, setVencAlongamento] = useState("");
+	// Form state seguindo estrutura de 3 decks
+	const [formState, setFormState] = useState<CalculatorFormState>({
+		// Deck 1: Process
+		refExterna: '',
+		nomeCliente: '',
+		incoterm: '',
+		moedaNegociada: '',
+		valorMoedaNegociada: 0,
+		valorMoedaNacional: 0,
 
-	// State for manual expense entry
-	const [newExpData, setNewExpData] = useState("");
-	const [newExpDias, setNewExpDias] = useState("");
-	const [newExpValor, setNewExpValor] = useState("");
+		// Deck 2: Contract
+		dataFechamento: '',
+		dataFaturamento: '',
+		prazoEmDias: 0,
+		vencimentoCliente: '',
 
-	// Taxas - BUSCADAS DO CONEXOS (editáveis)
-	const [cdiDiario, setCdiDiario] = useState(""); // CDI Diário (mantido para compatibilidade, mas não usado no cálculo principal)
-	const [cdiAoAno, setCdiAoAno] = useState(""); // CDI ao ano (inserção manual ou BCB)
-	const [cdiAM, setCdiAM] = useState(""); // CDI A.M (calculado para exibição)
-	const [txPtaxDI, setTxPtaxDI] = useState(""); // Tx Ptax D.I (inserção manual)
-	const [txSpotCompra, setTxSpotCompra] = useState(""); // Tx Spot - Compra
-	const [txFuturaVenc, setTxFuturaVenc] = useState(""); // Tx Futura - Venc (calculado automaticamente)
+		// Deck 3: Rates
+		taxaFechamento: null,
+		taxaPtaxDI: null,
+		taxaSpotDoDia: null,
+		taxaSpotNegociada: null,
+		taxaFutura: null,
 
-	// BCB CDI auto-fetch
-	const [loadingBCBCDI, setLoadingBCBCDI] = useState(false);
-	const [bcbCDIDate, setBcbCDIDate] = useState<string | null>(null);
+		// Calculation
+		cdiAoAno: null,
+		encargosCalculados: 0,
+	});
 
+	// Load process and contracts on mount
 	useEffect(() => {
-		loadProcess();
+		loadProcessData();
 	}, [processId]);
 
-	// Calcula CDI A.M a partir do CDI ao ano inserido manualmente: (CDI ao ano/12)+0,4%
+	// Calculate "Vencimento Cliente" when dataFaturamento or prazoEmDias changes
 	useEffect(() => {
-		if (cdiAoAno) {
-			const cdiAnual = parseFloat(cdiAoAno) || 0;
-			// Fórmula: (CDI ao ano/12)+0,4%
-			const cdiAMCalculado = (cdiAnual / 12) + 0.4;
-			setCdiAM(cdiAMCalculado.toFixed(10));
+		if (formState.dataFaturamento && formState.prazoEmDias > 0) {
+			const dataFat = new Date(formState.dataFaturamento);
+			dataFat.setDate(dataFat.getDate() + formState.prazoEmDias);
+			setFormState(prev => ({
+				...prev,
+				vencimentoCliente: dataFat.toISOString().split('T')[0]
+			}));
 		} else {
-			setCdiAM("");
+			setFormState(prev => ({ ...prev, vencimentoCliente: '' }));
 		}
-	}, [cdiAoAno]);
+	}, [formState.dataFaturamento, formState.prazoEmDias]);
 
-	// Calcula Dias: Data Movimento (prazo) - Venc. Cambio ao Fornec
-	useEffect(() => {
-		if (prazo && vencCambioOuFornec) {
-			const prazoDate = new Date(prazo);
-			const vencDate = new Date(vencCambioOuFornec);
-			if (!isNaN(prazoDate.getTime()) && !isNaN(vencDate.getTime())) {
-				const diffTime = Math.abs(prazoDate.getTime() - vencDate.getTime());
-				const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-				setDias(diffDays);
-			} else {
-				setDias(0);
-			}
-		} else {
-			setDias(0);
-		}
-	}, [prazo, vencCambioOuFornec]);
-
-	// Calcula Tx Futura - Venc: Tx Spot*((CDI ao ano*0,38)/360*Número de Dias)+Tx Spot
-	useEffect(() => {
-		if (txSpotCompra && cdiAoAno && dias > 0) {
-			const txSpot = parseFloat(txSpotCompra) || 0;
-			const cdiAnual = parseFloat(cdiAoAno) || 0;
-			const numDias = dias;
-
-			// Fórmula: Tx Spot*((CDI ao ano*0,38)/360*Número de Dias)+Tx Spot
-			const txFuturaCalculada = txSpot * ((cdiAnual * 0.38) / 360 * numDias) + txSpot;
-			setTxFuturaVenc(txFuturaCalculada.toFixed(10));
-		} else {
-			setTxFuturaVenc("");
-		}
-	}, [txSpotCompra, cdiAoAno, dias]);
-
-	// Preenche automaticamente as datas de vencimento e busca CDI quando um contrato é selecionado
-	useEffect(() => {
-		// PREENCHIMENTO AUTOMÁTICO REMOVIDO: O próprio usuário insira as datas e taxa spot
-		/*
-		if (selectedContract.imcDtaFechamento) {
-			try {
-				startDate = new Date(selectedContract.imcDtaFechamento).toISOString().split('T')[0];
-				setVencCambioOuFornec(startDate);
-			} catch (e) {
-				console.warn('Failed to parse imcDtaFechamento', selectedContract.imcDtaFechamento);
-			}
-		}
-		if (selectedContract.imcDtaLiquidacao) {
-			try {
-				endDate = new Date(selectedContract.imcDtaLiquidacao).toISOString().split('T')[0];
-				setVencAlongamento(endDate);
-			} catch (e) {
-				console.warn('Failed to parse imcDtaLiquidacao', selectedContract.imcDtaLiquidacao);
-			}
-		}
-
-		// Preencher a taxa do contrato (Tx Spot - Compra) conforme solicitado pelo usuário
-		if (selectedContract.imcFltTxFec) {
-			setTxSpotCompra(String(selectedContract.imcFltTxFec));
-		}
-		*/
-
-		// Busca automática de CDI removida - usuário deve inserir CDI ao ano manualmente
-		// Mantido código comentado caso seja necessário no futuro
-		/*
-		if (vencCambioOuFornec && vencAlongamento) {
-			const startValid = !isNaN(new Date(vencCambioOuFornec).getTime());
-			const endValid = !isNaN(new Date(vencAlongamento).getTime());
-
-			if (startValid && endValid) {
-				console.log('[CDI Fetch] Buscando CDI para intervalo:', vencCambioOuFornec, '->', vencAlongamento);
-				fetchCDI(vencCambioOuFornec, vencAlongamento)
-					.then((cdiRows) => {
-						if (Array.isArray(cdiRows) && cdiRows.length > 0) {
-							const first = cdiRows[0];
-							// Usar ftxNumFatAno para CDI ao ano
-							const value = first.ftxNumFatAno ?? 0;
-							setCdiAoAno(Number(value).toFixed(10));
-						}
-					})
-					.catch((err) => {
-						console.warn('Failed to fetch CDI range', err);
-					});
-			}
-		}
-		*/
-	}, [vencCambioOuFornec, vencAlongamento]);
-
-	// GERAÇÃO AUTOMÁTICA DE MOVIMENTO: Cria uma linha de despesa quando as datas e taxa spot são preenchidas
-	useEffect(() => {
-		if (vencCambioOuFornec && vencAlongamento && txSpotCompra && process) {
-			const start = new Date(vencCambioOuFornec);
-			const end = new Date(vencAlongamento);
-
-			if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && end >= start) {
-				// Usar o campo 'dias' calculado automaticamente
-				const diffDays = dias > 0 ? dias : Math.ceil(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-
-				// Valor base: Valor do contrato ou do processo
-				const valueUSD = selectedContract?.vlrMneg || process.mercadoriasValue || 0;
-
-				const autoMovement: Payment = {
-					id: "auto-hedge",
-					type: "cambio",
-					description: "Câmbio",
-					value: valueUSD,
-					paymentDate: vencCambioOuFornec,
-					dueDate: vencAlongamento,
-					days: diffDays,
-				};
-
-				setPayments(prev => {
-					const manualExpenses = prev.filter(p => p.id !== "auto-hedge");
-					return [autoMovement, ...manualExpenses];
-				});
-			}
-		}
-	}, [vencCambioOuFornec, vencAlongamento, txSpotCompra, process, selectedContract, dias]);
-
-	// Cálculo local de encargos para exibição em tempo real
-	// Nova fórmula: Encargo = (Valor Cambio*Taxa Futura)-(Valor Cambio*Taxa Ptax)
-	const calculateChargesLocally = (value: number, days: number) => {
-		const valorCambio = value;
-		const taxaFutura = parseFloat(txFuturaVenc) || 0;
-		const taxaPtax = parseFloat(txPtaxDI) || 0;
-		
-		// Fórmula: (Valor Cambio*Taxa Futura)-(Valor Cambio*Taxa Ptax)
-		// Nota: As taxas devem estar em formato decimal (ex: 5.5 para 5.5%)
-		// Se as taxas vierem como percentual, dividir por 100
-		const encargo = (valorCambio * taxaFutura / 100) - (valorCambio * taxaPtax / 100);
-		return encargo;
-	};
-
-	async function handleFetchBCBCDI() {
-		setLoadingBCBCDI(true);
-		try {
-			const latestCDI = await fetchBCBLatestCDI();
-			if (latestCDI) {
-				setCdiAoAno(latestCDI.annualRate.toFixed(4));
-				setBcbCDIDate(latestCDI.date);
-			} else {
-				setError("Nao foi possivel buscar CDI do Banco Central. Insira manualmente.");
-			}
-		} catch {
-			setError("Erro ao buscar CDI do Banco Central.");
-		} finally {
-			setLoadingBCBCDI(false);
-		}
-	}
-
-	function handleAddExpense() {
-		if (!newExpData || !newExpDias || !newExpValor) {
-			alert("Por favor, preencha Data, Dias e Valor para a despesa.");
-			return;
-		}
-
-		const numericValue = parseCurrencyInput(newExpValor);
-		const numericDias = parseInt(newExpDias, 10);
-
-		const expense: Payment = {
-			id: `exp-${Date.now()}`,
-			description: "Despesas",
-			value: numericValue,
-			paymentDate: newExpData,
-			dueDate: newExpData,
-			days: numericDias,
-			calculatedInterest: calculateChargesLocally(numericValue, numericDias)
-		};
-
-		setPayments(prev => [...prev, expense]);
-		setNewExpData("");
-		setNewExpDias("");
-		setNewExpValor("");
-	}
-
-	function handleRemovePayment(id: string) {
-		setPayments(prev => prev.filter(p => p.id !== id));
-	}
-
-	async function loadProcess() {
+	async function loadProcessData() {
 		try {
 			setLoading(true);
 			setError(null);
+
 			const data = await fetchProcess(processId);
-			setProcess(data.process);
-			setPayments(data.payments || []);
-			setParcelsError((data as any).parcelsError || null);
+			const processData = data.process;
+			setProcess(processData);
 
+			// Load contracts
+			const priCod = processData?.priCod || parseInt(processId, 10);
+			if (!isNaN(priCod)) {
+				const contractsData = await fetchContractsByProcess(priCod);
+				setContracts(contractsData || []);
 
-
-			// Buscar contratos relacionados ao processo específico
-			try {
-				setLoadingContracts(true);
-				const priCod = data.process?.priCod || parseInt(processId, 10);
-				if (priCod && !isNaN(priCod)) {
-					const contractsData = await fetchContractsByProcess(priCod);
-					setContracts(contractsData || []);
-					if (contractsData && contractsData.length > 0) {
-						// Se temos um contractId na URL, tentamos selecionar ele
-						if (contractIdParam) {
-							const found = contractsData.find(c => String(c.imcCod) === contractIdParam);
-							if (found) {
-								setSelectedContract(found);
-							} else {
-								setSelectedContract(contractsData[0]);
-							}
-						} else {
-							setSelectedContract(contractsData[0]);
-						}
-					}
-				} else {
-					setContracts([]);
+				// Auto-select contract if provided in URL or select first
+				let contractToLoad = null;
+				if (contractIdParam && contractsData.length > 0) {
+					contractToLoad = contractsData.find((c: any) => String(c.imcCod) === contractIdParam);
 				}
-			} catch (err) {
-				console.warn('Failed to fetch contracts for process', processId, err);
-				setContracts([]);
-			} finally {
-				setLoadingContracts(false);
+				if (!contractToLoad && contractsData.length > 0) {
+					contractToLoad = contractsData[0];
+				}
+
+				if (contractToLoad) {
+					// Passar processData diretamente em vez de usar o state
+					await loadEnrichedContract(priCod, contractToLoad.imcCod, processData);
+				}
 			}
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to load process");
+		} catch (err: any) {
+			console.error('Error loading process:', err);
+			setError(err.message || 'Erro ao carregar processo');
 		} finally {
 			setLoading(false);
 		}
 	}
 
-
-	async function handleCalculate() {
-		if (!process) return;
-
-		if (!prazo || !vencCambioOuFornec || !cdiAoAno || !txSpotCompra || !txPtaxDI) {
-			setError(`Por favor, preencha todos os campos obrigatórios: ${!prazo ? "Prazo (Data Movimento) " : ""}${!vencCambioOuFornec ? "Venc. Cambio ou Fornec. " : ""}${!cdiAoAno ? "CDI ao Ano " : ""}${!txSpotCompra ? "Tx Spot - Compra " : ""}${!txPtaxDI ? "Tx Ptax D.I" : ""}`);
-			return;
-		}
-
+	async function loadEnrichedContract(priCod: number, imcCod: number, processData: any) {
 		try {
-			setCalculating(true);
-			setError(null);
+			const enriched = await fetchEnrichedContractData(priCod, imcCod);
+			setSelectedContract(enriched);
 
-			// Map new field names to backend expected names
-			const input = {
-				processId: process.id,
-				// Backend expects these field names:
-				emissionDate: vencCambioOuFornec || new Date().toISOString().split('T')[0],
-				taxaCDI: parseFloat(cdiAoAno || "0"), // Usando CDI ao ano como taxa principal
-				taxaConexos: parseFloat(txSpotCompra || "0"),
-				// Additional fields for context
-				prazo: prazo ? prazo.toISOString().split('T')[0] : "",
-				dias: dias,
-				vencimentoCambio: vencCambioOuFornec,
-				vencimentoAlongamento: vencAlongamento,
-				txPtaxDI: parseFloat(txPtaxDI || "0"),
-				txFuturaVenc: parseFloat(txFuturaVenc || "0"),
-				cdiAoAno: parseFloat(cdiAoAno || "0"),
-				cdiDiario: parseFloat(cdiDiario || "0"), // Mantido para compatibilidade
-				payments,
-			};
-
-			let calculationResult: any = await calculateCharges(process.id, input);
-
-			// Mapear resposta do backend se necessário
-			// Se a resposta veio com estrutura diferente, normalizar para CalculationResult
-			console.log("Calculation result received:", calculationResult);
-
-			// Verificar se precisa fazer mapeamento (se não tiver a estrutura esperada)
-			if (!calculationResult.totalDisburse && !calculationResult.summary) {
-				// Backend retornou estrutura diferente, fazer mapeamento
-				const totalDisburse = calculationResult.custos?.custoTotalImportacao ?? calculationResult.summary?.totalDesembolso ?? 0;
-				const totalInterest = calculationResult.encargos?.encargosFinanciamento ?? 0;
-				const totalCharges = (calculationResult.encargos?.total ?? 0) || totalDisburse;
-
-				const mappedResult: CalculationResult = {
-					processId: calculationResult.processId || process.id,
-					emissionDate: calculationResult.emissionDate || input.emissionDate,
-					totalDisburse: Number(totalDisburse) || 0,
-					totalInterest: Number(totalInterest) || 0,
-					totalCharges: Number(totalCharges) || 0,
-					payments: calculationResult.movimentos?.map((m: any) => ({
-						id: `${m.data}-${m.historico}`,
-						type: "cambio" as const,
-						description: m.historico,
-						value: Number(m.valorUSD) || 0,
-						paymentDate: m.data,
-						dueDate: m.data,
-						days: Number(m.diasCorridos) || 0,
-						interestRate: Number(m.txSpot) ? (Number(m.txSpot) / 100) : 0,
-						calculatedInterest: Number(m.encargos) || 0,
-					})) || [],
-					summary: {
-						calculationDate: calculationResult.summary?.calculadoEm || new Date().toISOString(),
-						taxaCDI: parseFloat(cdiDiario || "0") || 0,
-						taxaConexos: parseFloat(txSpotCompra || "0") || 0,
-						effectiveRate: (parseFloat(cdiDiario || "0") || 0) / 100,
-					},
-				};
-				console.log("Mapped result:", mappedResult);
-				calculationResult = mappedResult;
-			} else {
-				// Validar que todos os valores estão corretos
-				const validatedResult: CalculationResult = {
-					...calculationResult,
-					totalDisburse: Number(calculationResult.totalDisburse) || 0,
-					totalInterest: Number(calculationResult.totalInterest) || 0,
-					totalCharges: Number(calculationResult.totalCharges) || 0,
-					totalLostInterest: Number(calculationResult.totalLostInterest) || 0,
-					hasExistingInterest: !!calculationResult.hasExistingInterest,
-					payments: (calculationResult.payments || []).map((p: any) => ({
-						...p,
-						value: Number(p.value) || 0,
-						calculatedInterest: Number(p.calculatedInterest) || 0,
-					})),
-				};
-				calculationResult = validatedResult;
+			// Auto-populate form from contract, passando processData diretamente
+			if (enriched && processData) {
+				await autoPopulateFromContract(enriched, processData);
 			}
-
-			console.log("Calculation results being set in state:", calculationResult);
-			setResult(calculationResult);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to calculate");
-		} finally {
-			setCalculating(false);
+		} catch (err: any) {
+			console.error('Error loading enriched contract:', err);
+			setError('Erro ao carregar dados do contrato');
 		}
 	}
 
+	async function autoPopulateFromContract(contract: EnrichedContractData, proc: any) {
+		// Debug: log dos dados recebidos
+		console.log('[DEBUG] Process data:', proc);
+		console.log('[DEBUG] Contract data:', contract);
+
+		// Deck 1: Process Information (USAR DADOS DO PROCESSO, NÃO DO CONTRATO)
+		// Tentar pegar do objeto normalizado primeiro, depois do raw
+		const raw = proc.raw || proc;
+
+		const refExterna = proc.priEspRefcliente || raw.priEspRefcliente || proc.processNumber || '';
+		const nomeCliente = proc.dpeNomPessoa || raw.dpeNomPessoa || proc.clientName || '';
+		const incoterm = proc.incoterm || raw.incoterm || raw.incEspSigla || '';
+
+		// Moeda e Valores: priorizar campos do processo
+		const moedaNegociada = proc.currency || raw.moeEspNome || 'USD';
+		const valorMoedaNegociada = Number(proc.mercadoriasValue || raw.vlrMneg || 0);
+		const valorMoedaNacional = Number(raw.vlrTotalNac || raw.vlrMnac || proc.mercadoriasValue || 0);
+
+		// Deck 2: Contract Information
+		const dataFechamento = contract.imcDtaFechamento
+			? new Date(contract.imcDtaFechamento).toISOString().split('T')[0]
+			: '';
+		const dataFaturamento = ''; // Será implementado depois
+
+		// Deck 3: Contract Rates
+		const taxaFechamento = contract.imcFltTxFec || null;
+		const taxaPtaxDI = contract.taxaPtaxDI || null;
+
+		// Fetch BCB data if A Prazo
+		let taxaSpotDoDia: number | null = null;
+		if (contract.isAPrazo && dataFechamento) {
+			try {
+				taxaSpotDoDia = await fetchBCBPtaxVenda(dataFechamento);
+			} catch (err) {
+				console.warn('Failed to fetch Ptax venda from BCB:', err);
+			}
+		}
+
+		const newFormState = {
+			refExterna,
+			nomeCliente,
+			incoterm,
+			moedaNegociada,
+			valorMoedaNegociada,
+			valorMoedaNacional,
+			dataFechamento,
+			dataFaturamento,
+			prazoEmDias: 0, // User must input
+			vencimentoCliente: '',
+			taxaFechamento,
+			taxaPtaxDI,
+			taxaSpotDoDia,
+			taxaSpotNegociada: null, // User must input if A Prazo
+			taxaFutura: null, // User must input if A Prazo
+			cdiAoAno: null,
+			encargosCalculados: 0,
+		};
+
+		console.log('[DEBUG] Form state populated:', newFormState);
+		setFormState(newFormState);
+	}
+
+	async function handleFetchCDI() {
+		try {
+			setLoadingBCBCDI(true);
+			const latestCDI = await fetchBCBLatestCDI();
+			if (latestCDI) {
+				setFormState(prev => ({
+					...prev,
+					cdiAoAno: latestCDI.annualRate
+				}));
+			} else {
+				setError('Erro ao buscar CDI do BCB');
+			}
+		} catch (err: any) {
+			console.error('Error fetching CDI:', err);
+			setError('Erro ao buscar CDI do BCB');
+		} finally {
+			setLoadingBCBCDI(false);
+		}
+	}
+
+	function handleCalculate() {
+		// Nova fórmula: Encargo = (Valor Moeda Nacional × Prazo em dias) / (CDI diária)
+		// Onde CDI Diária = CDI ao ano / 360
+
+		if (!formState.cdiAoAno || formState.prazoEmDias <= 0 || formState.valorMoedaNacional <= 0) {
+			setError('Preencha todos os campos obrigatórios: CDI ao Ano, Prazo em Dias e Valor Moeda Nacional');
+			return;
+		}
+
+		const cdiDiaria = formState.cdiAoAno / 360;
+		const encargo = (formState.valorMoedaNacional * formState.prazoEmDias) / cdiDiaria;
+
+		setFormState(prev => ({
+			...prev,
+			encargosCalculados: encargo
+		}));
+
+		setError(null);
+	}
+
 	async function handleSubmit() {
-		if (!result || !process) return;
+		if (!formState.encargosCalculados || formState.encargosCalculados <= 0) {
+			setError('Calcule os encargos antes de enviar');
+			return;
+		}
+
+		if (!process) {
+			setError('Processo não carregado');
+			return;
+		}
 
 		try {
 			setSubmitting(true);
 			setError(null);
 
-			await submitToConexos(process.id, {
-				...result,
-				clientName: process.clientName,
-			});
+			// Prepare data for submission
+			const dataToSubmit: CalculationResult & { clientName: string } = {
+				processId: processId,
+				emissionDate: formState.dataFechamento || new Date().toISOString().split('T')[0],
+				totalDisburse: formState.valorMoedaNacional,
+				totalInterest: formState.encargosCalculados,
+				totalCharges: formState.valorMoedaNacional + formState.encargosCalculados,
+				payments: [],
+				summary: {
+					calculationDate: new Date().toISOString(),
+					taxaCDI: formState.cdiAoAno || 0,
+					taxaConexos: formState.taxaFechamento || 0,
+					effectiveRate: 0,
+				},
+				clientName: formState.nomeCliente,
+			};
 
-			alert("Cálculo enviado ao Conexos com sucesso!");
-		} catch (err) {
-			setError(err instanceof Error ? err.message : "Failed to submit");
+			await submitToConexos(processId, dataToSubmit);
+			alert('Encargos financeiros enviados ao Conexos com sucesso!');
+
+			// Reload process data to show updated expenses
+			await loadProcessData();
+		} catch (err: any) {
+			console.error('Error submitting to Conexos:', err);
+			setError('Erro ao enviar para o Conexos: ' + (err.message || 'Erro desconhecido'));
 		} finally {
 			setSubmitting(false);
 		}
 	}
 
-	function formatCurrency(value: number | undefined | null) {
-		// Tratar valores inválidos
-		const numValue = Number(value) || 0;
-		if (!isFinite(numValue)) {
-			return "R$ 0,00";
-		}
-		return new Intl.NumberFormat("pt-BR", {
-			style: "currency",
-			currency: "BRL",
-		}).format(numValue);
-	}
-
-	function formatDate(dateString: string) {
-		return new Date(dateString).toLocaleDateString("pt-BR");
-	}
-
-	function generatePDF() {
-		if (!result || !process) return;
-
-		// Criar conteúdo HTML para o PDF
-		const pdfContent = `
-<!DOCTYPE html>
-<html>
-<head>
-	<meta charset="UTF-8">
-	<title>Encargos Financeiros - ${process.processNumber}</title>
-	<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
-	<style>
-		@page {
-			size: A4;
-			margin: 20mm;
-		}
-		* {
-			margin: 0;
-			padding: 0;
-			box-sizing: border-box;
-		}
-		body {
-			font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-			font-size: 10pt;
-			color: #000;
-		}
-		.header {
-			display: flex;
-			justify-content: space-between;
-			align-items: center;
-			margin-bottom: 20px;
-			border-bottom: 2px solid #000;
-			padding-bottom: 10px;
-		}
-		.logo {
-			font-size: 24pt;
-			font-weight: bold;
-			color: #E85D04;
-		}
-		.logo-subtitle {
-			font-size: 10pt;
-			color: #E85D04;
-		}
-		.title {
-			font-size: 18pt;
-			font-weight: bold;
-			text-align: center;
-		}
-		.process-info {
-			margin: 20px 0;
-			font-weight: bold;
-		}
-		.info-section {
-			margin: 15px 0;
-			background-color: #f5f5f5;
-			padding: 10px;
-			border-radius: 4px;
-		}
-		.info-row {
-			display: flex;
-			justify-content: space-between;
-			margin: 5px 0;
-		}
-		.info-label {
-			font-weight: bold;
-			min-width: 120px;
-		}
-		.section-title {
-			font-weight: bold;
-			font-size: 11pt;
-			margin: 15px 0 10px 0;
-			padding: 5px;
-			background-color: #f0f0f0;
-			border-left: 4px solid #E85D04;
-		}
-		table {
-			width: 100%;
-			border-collapse: collapse;
-			margin: 10px 0;
-			font-size: 9pt;
-		}
-		th {
-			background-color: #333;
-			color: white;
-			padding: 8px 5px;
-			text-align: left;
-			font-weight: bold;
-		}
-		td {
-			padding: 6px 5px;
-			border: 1px solid #ddd;
-		}
-		tr:nth-child(even) {
-			background-color: #f9f9f9;
-		}
-		.text-right {
-			text-align: right;
-		}
-		.text-center {
-			text-align: center;
-		}
-		.total-row {
-			background-color: #f0f0f0 !important;
-			font-weight: bold;
-		}
-		.footer {
-			margin-top: 30px;
-			text-align: center;
-			font-size: 8pt;
-			color: #666;
-		}
-		.cdi-box {
-			background-color: #f5f5f5;
-			padding: 10px;
-			margin: 10px 0;
-			text-align: right;
-			font-weight: bold;
-			border: 1px solid #ddd;
-		}
-		.summary-grid {
-			display: grid;
-			grid-template-columns: repeat(3, 1fr);
-			gap: 10px;
-			margin: 15px 0;
-		}
-		.summary-card {
-			background-color: #f9f9f9;
-			border: 1px solid #ddd;
-			padding: 10px;
-			text-align: center;
-		}
-		.summary-label {
-			font-size: 8pt;
-			color: #666;
-			margin-bottom: 5px;
-		}
-		.summary-value {
-			font-size: 14pt;
-			font-weight: bold;
-			color: #000;
-		}
-	</style>
-</head>
-<body>
-	<div class="header">
-		<div>
-			<div class="logo">COLUMBIA</div>
-			<div class="logo-subtitle">trading</div>
-		</div>
-		<div class="title">Encargos Financeiros</div>
-	</div>
-
-	<div class="process-info">
-		Nro Processo: ${process.processNumber}
-	</div>
-
-	<div class="info-section">
-		<div class="info-row">
-			<span><span class="info-label">CDI ao Ano:</span> ${formatRate(cdiAoAno)}%</span>
-		</div>
-		<div class="info-row">
-			<span><span class="info-label">CDI A.M:</span> ${formatRate(cdiAM)}%</span>
-		</div>
-	</div>
-
-	<div class="section-title">Custo Hedge/Câmbio</div>
-	
-	<table>
-		<thead>
-			<tr>
-				<th>Vlr. Negociado</th>
-				<th>Vlr. Nacional</th>
-				<th class="text-center">Data Hedge/Cambio</th>
-				<th class="text-center">Data Venc. Cambio</th>
-				<th class="text-center">Prazo</th>
-				<th class="text-right">Taxa DI</th>
-				<th class="text-right">Taxa Contrato</th>
-				<th class="text-right">Custo Hedge</th>
-			</tr>
-		</thead>
-		<tbody>
-			<tr>
-				<td class="text-right">${selectedContract?.vlrMneg ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: getCurrencyCode(selectedContract.moeEspNome || 'USD') }).format(selectedContract.vlrMneg) : '-'}</td>
-				<td class="text-right">${selectedContract?.vlrTotalNac ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(selectedContract.vlrTotalNac) : '-'}</td>
-				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
-				<td class="text-center">${vencCambioOuFornec ? formatDate(vencCambioOuFornec) : '-'}</td>
-				<td class="text-center">${prazo ? formatDate(prazo.toISOString().split('T')[0]) : '-'}</td>
-				<td class="text-right">${formatRate(txPtaxDI)}</td>
-				<td class="text-right">${formatRate(txSpotCompra)}</td>
-				<td class="text-right">${formatCurrency(result.totalDisburse)}</td>
-			</tr>
-		</tbody>
-	</table>
-
-	<div class="section-title">Encargos</div>
-	
-	<table>
-		<thead>
-			<tr>
-				<th>Descrição</th>
-				<th class="text-center">Data de Desembolso</th>
-				<th class="text-center">Data de Vencimento</th>
-				<th class="text-center">Dias</th>
-				<th class="text-center">Taxa de Juros Efetiva</th>
-				<th class="text-right">Valor Despesa</th>
-				<th class="text-right">Encargos</th>
-			</tr>
-		</thead>
-		<tbody>
-			${result.payments?.map(payment => `
-				<tr>
-					<td>${payment.description}</td>
-					<td class="text-center">${formatDate(payment.paymentDate)}</td>
-					<td class="text-center">${formatDate(payment.dueDate)}</td>
-					<td class="text-center">${payment.days}</td>
-					<td class="text-center">${formatRate(payment.interestRate! * 100)}</td>
-					<td class="text-right">${formatCurrency(payment.value)}</td>
-					<td class="text-right">${formatCurrency(payment.calculatedInterest!)}</td>
-				</tr>
-			`).join('')}
-		</tbody>
-		<tfoot>
-			<tr class="total-row">
-				<td colspan="5" class="text-right"><strong></strong></td>
-				<td class="text-right"><strong>${formatCurrency(result.totalDisburse)}</strong></td>
-				<td class="text-right"><strong>${formatCurrency(result.totalInterest)}</strong></td>
-			</tr>
-			<tr>
-				<td colspan="6" class="text-right"><strong>IOF Total:</strong></td>
-				<td class="text-right"><strong>0,00 BRL</strong></td>
-			</tr>
-		</tfoot>
-	</table>
-
-		<div class="cdi-box">
-			CDI ao Ano: ${formatRate(cdiAoAno)}% | CDI A.M: ${formatRate(cdiAM)}%
-		</div>
-
-	<div class="footer">
-		<p>Documento gerado automaticamente em ${new Date().toLocaleString('pt-BR')}</p>
-		<p>Columbia Trading S/A - Sistema de Cálculo de Encargos Financeiros</p>
-	</div>
-</body>
-</html>
-		`;
-
-		// Abrir nova janela e imprimir
-		const printWindow = window.open('', '_blank');
-		if (printWindow) {
-			printWindow.document.write(pdfContent);
-			printWindow.document.close();
-
-			// Aguardar carregamento e imprimir
-			printWindow.onload = () => {
-				setTimeout(() => {
-					printWindow.print();
-				}, 250);
-			};
-		}
+	function handlePrint() {
+		window.print();
 	}
 
 	if (loading) {
 		return (
-			<div className="flex items-center justify-center min-h-[calc(100vh-5rem)] p-6">
-				<Spinner className="w-8 h-8 text-[#337ab7]" />
-			</div>
+			<ProtectedRoute>
+				<div className="flex items-center justify-center min-h-screen">
+					<Spinner className="w-8 h-8" />
+					<span className="ml-3">Carregando...</span>
+				</div>
+			</ProtectedRoute>
 		);
 	}
 
-	if (error && !process) {
+	if (!process || !selectedContract) {
 		return (
-			<div className="p-6 max-w-6xl mx-auto">
-				<Alert variant="destructive">
-					<AlertDescription>{error}</AlertDescription>
-				</Alert>
-				<Button onClick={() => router.push("/")} className="mt-4 bg-[#337ab7] hover:bg-blue-800">
-					Voltar para Processos
-				</Button>
-			</div>
+			<ProtectedRoute>
+				<div className="p-6 max-w-6xl mx-auto">
+					<Alert>
+						<AlertDescription>
+							Processo ou contrato não encontrado
+						</AlertDescription>
+					</Alert>
+					<Button onClick={() => router.back()} className="mt-4">
+						<ArrowLeft className="w-4 h-4 mr-2" />
+						Voltar
+					</Button>
+				</div>
+			</ProtectedRoute>
 		);
 	}
 
-	if (!process) return null;
+	const isAVista = selectedContract.isAVista;
+	const isAPrazo = selectedContract.isAPrazo;
 
 	return (
 		<ProtectedRoute>
 			<div className="p-6 max-w-6xl mx-auto">
-				<div className="mb-6">
-					<Button variant="ghost" onClick={() => router.push("/")} className="hover:bg-gray-100">
-						← Voltar
-					</Button>
+				{/* Header */}
+				<div className="flex items-center justify-between mb-6">
+					<div className="flex items-center gap-4">
+						<Button variant="ghost" size="sm" onClick={() => router.back()}>
+							<ArrowLeft className="w-4 h-4 mr-2" />
+							Voltar
+						</Button>
+						<div>
+							<h1 className="text-2xl font-bold">Cálculo de Encargos</h1>
+							<p className="text-gray-600">
+								Processo: {formState.refExterna} - {formState.nomeCliente}
+							</p>
+						</div>
+					</div>
 				</div>
 
-				{/* Alerta de ausência de contratos */}
-				{!loadingContracts && contracts.length === 0 && (
-					<Alert variant="destructive" className="mb-6">
-						<svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-						</svg>
-						<AlertDescription className="ml-2">
-							<strong>Atenção:</strong> Não há contratos de câmbio vinculados a este processo.
-						</AlertDescription>
+				{error && (
+					<Alert className="mb-6 bg-red-50 border-red-200">
+						<AlertDescription className="text-red-800">{error}</AlertDescription>
 					</Alert>
 				)}
 
-				{/* SEÇÃO 1: CABEÇALHO - Dados do Processo (conforme planilha Excel) */}
-				<Card className="mb-6 shadow-sm">
+				{/* DECK 1: Informações do Processo */}
+				<Card className="mb-6">
 					<CardHeader className="bg-gray-50 border-b">
-						<div className="flex items-center gap-2">
-							<svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-							</svg>
-							<CardTitle className="text-lg font-semibold text-gray-900">Informações do Processo</CardTitle>
-						</div>
-						<CardDescription className="text-gray-600">
-							Columbia Trading S/A - CÁLCULO DE ENCARGOS FINANCEIROS
-						</CardDescription>
+						<CardTitle>Deck 1: Informações do Processo</CardTitle>
 					</CardHeader>
 					<CardContent className="pt-6">
-						<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-							{/* Linha 1 */}
-							<div className="space-y-2">
-								<Label className="text-sm font-medium text-gray-700">Cliente</Label>
+						<div className="grid grid-cols-2 gap-4">
+							<div>
+								<Label className="text-sm text-gray-600">Referência Externa</Label>
 								<Input
-									value={process.dpeNomPessoa}
+									value={formState.refExterna}
 									disabled
-									className="bg-gray-50 border-gray-200"
+									className="bg-gray-50"
 								/>
 							</div>
-							<div className="space-y-2">
-								<Label className="text-sm font-medium text-gray-700">Processo</Label>
+							<div>
+								<Label className="text-sm text-gray-600">Nome do Cliente</Label>
 								<Input
-									value={process.priEspRefcliente}
+									value={formState.nomeCliente}
 									disabled
-									className="bg-gray-50 border-gray-200"
+									className="bg-gray-50"
 								/>
 							</div>
-							<div className="space-y-2">
-								<Label className="text-sm font-medium text-gray-700">Incoterm</Label>
+							<div>
+								<Label className="text-sm text-gray-600">Incoterm</Label>
 								<Input
-									value={process.incoterm}
+									value={formState.incoterm}
 									disabled
-									className="bg-gray-50 border-gray-200"
+									className="bg-gray-50"
 								/>
 							</div>
-							<div className="space-y-2">
-								<Label className="text-sm font-medium text-gray-700">Valor Moeda Negociada</Label>
+							<div>
+								<Label className="text-sm text-gray-600">Moeda Negociada</Label>
 								<Input
-									value={selectedContract?.vlrMneg ? new Intl.NumberFormat('pt-BR', {
+									value={formState.moedaNegociada}
+									disabled
+									className="bg-gray-50"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Valor Moeda Negociada</Label>
+								<Input
+									value={new Intl.NumberFormat('pt-BR', {
+										minimumFractionDigits: 2,
+										maximumFractionDigits: 2
+									}).format(formState.valorMoedaNegociada)}
+									disabled
+									className="bg-gray-50"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Valor Moeda Nacional (BRL)</Label>
+								<Input
+									value={new Intl.NumberFormat('pt-BR', {
 										style: 'currency',
-										currency: getCurrencyCode(selectedContract.moeEspNome || 'USD')
-									}).format(selectedContract.vlrMneg) : formatCurrency(process.mercadoriasValue)}
+										currency: 'BRL'
+									}).format(formState.valorMoedaNacional)}
 									disabled
-									className="bg-gray-50 border-gray-200"
+									className="bg-gray-50 font-semibold"
 								/>
 							</div>
+						</div>
+					</CardContent>
+				</Card>
 
-							{/* Linha 2 - Campos de Input */}
-							<div className="space-y-2">
-								<Label htmlFor="prazo" className="text-sm font-medium text-gray-700">
-									Prazo (Data Movimento)
-								</Label>
-								<Popover>
-									<PopoverTrigger asChild>
+				{/* DECK 2: Informações do Contrato de Câmbio */}
+				<Card className="mb-6">
+					<CardHeader className="bg-gray-50 border-b">
+						<CardTitle>Deck 2: Informações do Contrato de Câmbio</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-6">
+						<div className="grid grid-cols-2 gap-4">
+							<div>
+								<Label className="text-sm text-gray-600">Data Fechamento</Label>
+								<Input
+									type="date"
+									value={formState.dataFechamento}
+									disabled
+									className="bg-gray-50"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Data Faturamento (Invoice/Proforma)</Label>
+								<Input
+									type="date"
+									value={formState.dataFaturamento}
+									disabled
+									className="bg-gray-50"
+								/>
+								{!formState.dataFaturamento && (
+									<p className="text-xs text-orange-600 mt-1">
+										⚠ Data de faturamento não disponível no Conexos
+									</p>
+								)}
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Prazo (em dias) *</Label>
+								<Input
+									type="number"
+									value={formState.prazoEmDias || ''}
+									onChange={(e) => setFormState(prev => ({
+										...prev,
+										prazoEmDias: parseInt(e.target.value, 10) || 0
+									}))}
+									className="border-blue-400"
+									placeholder="Ex: 30"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Vencimento Cliente (calculado)</Label>
+								<Input
+									type="date"
+									value={formState.vencimentoCliente}
+									disabled
+									className="bg-green-50"
+								/>
+							</div>
+						</div>
+					</CardContent>
+				</Card>
+
+				{/* DECK 3: Taxas do Contrato - RENDERIZAÇÃO CONDICIONAL */}
+				<Card className="mb-6">
+					<CardHeader className="bg-gray-50 border-b">
+						<CardTitle>Deck 3: Taxas do Contrato</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-6">
+						{isAVista ? (
+							// À VISTA / ANTECIPADO: Mostrar apenas Taxa Fechamento
+							<div>
+								<Label className="text-sm text-gray-600">Taxa Fechamento</Label>
+								<Input
+									value={formState.taxaFechamento?.toFixed(4) || '0.0000'}
+									disabled
+									className="bg-gray-50 font-semibold"
+								/>
+								<p className="text-sm text-gray-500 mt-2">
+									ℹ Contrato à vista ou antecipado. Apenas Taxa Fechamento aplicável.
+								</p>
+							</div>
+						) : (
+							// A PRAZO: Mostrar todas as taxas
+							<div className="grid grid-cols-2 gap-4">
+								<div>
+									<Label className="text-sm text-gray-600">Taxa Ptax da D.I (Conexos)</Label>
+									<Input
+										value={formState.taxaPtaxDI?.toFixed(4) || '0.0000'}
+										disabled
+										className="bg-gray-50"
+									/>
+									{!formState.taxaPtaxDI && (
+										<p className="text-xs text-orange-600 mt-1">
+											⚠ Taxa Ptax D.I não disponível
+										</p>
+									)}
+								</div>
+								<div>
+									<Label className="text-sm text-gray-600">Taxa Spot do dia do fechamento (BCB)</Label>
+									<div className="flex gap-2">
+										<Input
+											value={formState.taxaSpotDoDia?.toFixed(4) || '0.0000'}
+											disabled
+											className="bg-gray-50"
+										/>
 										<Button
 											variant="outline"
-											className={`w-full justify-start text-left font-normal ${!prazo ? "text-muted-foreground" : ""}`}
+											size="sm"
+											onClick={async () => {
+												if (formState.dataFechamento) {
+													const rate = await fetchBCBPtaxVenda(formState.dataFechamento);
+													if (rate) {
+														setFormState(prev => ({ ...prev, taxaSpotDoDia: rate }));
+													}
+												}
+											}}
 										>
-											<CalendarIcon className="mr-2 h-4 w-4" />
-											{prazo ? format(prazo, "dd/MM/yyyy", { locale: ptBR }) : "Selecione a data"}
+											Atualizar
 										</Button>
-									</PopoverTrigger>
-									<PopoverContent className="w-auto p-0" align="start">
-										<Calendar
-											mode="single"
-											selected={prazo}
-											onSelect={setPrazo}
-											initialFocus
-											locale={ptBR}
-										/>
-									</PopoverContent>
-								</Popover>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="dias" className="text-sm font-medium text-gray-700">
-									Dias (Calculado)
-								</Label>
-								<Input
-									id="dias"
-									type="number"
-									value={dias}
-									readOnly
-									className="bg-gray-50 border-gray-200 text-gray-600"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="vencCambioOuFornec" className="text-sm font-medium text-gray-700">
-									Venc. Cambio ou Fornec.
-								</Label>
-								<Input
-									id="vencCambioOuFornec"
-									type="date"
-									value={vencCambioOuFornec}
-									onChange={(e) => setVencCambioOuFornec(e.target.value)}
-									className="border-gray-300 focus:border-gray-400"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="vencAlongamento" className="text-sm font-medium text-gray-700">
-									Venc. Alongamento
-								</Label>
-								<Input
-									id="vencAlongamento"
-									type="date"
-									value={vencAlongamento}
-									onChange={(e) => setVencAlongamento(e.target.value)}
-									className="border-gray-300 focus:border-gray-400"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="cdiAoAno" className="text-sm font-medium text-gray-700">
-									CDI ao Ano (%)
-								</Label>
-								<div className="flex gap-2">
+									</div>
+								</div>
+								<div>
+									<Label className="text-sm text-gray-600">Taxa Spot Negociada *</Label>
 									<Input
-										id="cdiAoAno"
 										type="number"
 										step="0.0001"
-										value={cdiAoAno}
-										onChange={(e) => { setCdiAoAno(e.target.value); setBcbCDIDate(null); }}
+										value={formState.taxaSpotNegociada || ''}
+										onChange={(e) => setFormState(prev => ({
+											...prev,
+											taxaSpotNegociada: parseFloat(e.target.value) || null
+										}))}
+										className="border-blue-400"
+										placeholder="Ex: 5.5000"
+									/>
+								</div>
+								<div>
+									<Label className="text-sm text-gray-600">Taxa Futura *</Label>
+									<Input
+										type="number"
+										step="0.0001"
+										value={formState.taxaFutura || ''}
+										onChange={(e) => setFormState(prev => ({
+											...prev,
+											taxaFutura: parseFloat(e.target.value) || null
+										}))}
+										className="border-blue-400"
+										placeholder="Ex: 5.6000"
+									/>
+								</div>
+							</div>
+						)}
+					</CardContent>
+				</Card>
+
+				{/* Seção de Cálculo de Encargos */}
+				<Card className="mb-6">
+					<CardHeader className="bg-gray-50 border-b">
+						<CardTitle>Cálculo de Encargos</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-6">
+						<div className="grid grid-cols-2 gap-4 mb-4">
+							<div>
+								<Label className="text-sm text-gray-600">CDI do dia do fechamento (ao ano) *</Label>
+								<div className="flex gap-2">
+									<Input
+										type="number"
+										step="0.0001"
+										value={formState.cdiAoAno || ''}
+										onChange={(e) => setFormState(prev => ({
+											...prev,
+											cdiAoAno: parseFloat(e.target.value) || null
+										}))}
+										className="border-blue-400"
 										placeholder="Ex: 10.5"
-										className="border-gray-300 focus:border-gray-400"
 									/>
 									<Button
-										type="button"
 										variant="outline"
 										size="sm"
-										onClick={handleFetchBCBCDI}
+										onClick={handleFetchCDI}
 										disabled={loadingBCBCDI}
-										className="whitespace-nowrap text-xs"
 									>
-										{loadingBCBCDI ? "Buscando..." : "Buscar CDI"}
+										{loadingBCBCDI ? <Spinner className="w-4 h-4" /> : 'Buscar CDI'}
 									</Button>
 								</div>
-								{bcbCDIDate && (
-									<Badge variant="outline" className="text-xs text-gray-500">
-										CDI BCB {new Date(bcbCDIDate + 'T12:00:00').toLocaleDateString('pt-BR')}
-									</Badge>
-								)}
 							</div>
 						</div>
-					</CardContent>
-				</Card>
 
-				{/* SEÇÃO 2: TAXAS E PARÂMETROS (conforme colunas da planilha) */}
-				<Card className="mb-6 shadow-sm">
-					<CardHeader className="bg-gray-50 border-b">
-						<div className="flex items-center gap-2">
-							<svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-							</svg>
-							<CardTitle className="text-lg font-semibold text-gray-900">Taxas de Câmbio</CardTitle>
-						</div>
-						<CardDescription className="text-gray-600">
-							Configure as taxas para o cálculo dos encargos financeiros
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="pt-6">
-						<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-							<div className="space-y-2">
-								<Label htmlFor="txPtaxDI" className="text-sm font-medium text-gray-700">
-									Tx Ptax D.I (%)
-								</Label>
-								<Input
-									id="txPtaxDI"
-									type="number"
-									step="0.0001"
-									value={txPtaxDI}
-									onChange={(e) => setTxPtaxDI(e.target.value)}
-									placeholder="Inserção manual"
-									className="border-gray-300 focus:border-gray-400"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="txSpotCompra" className="text-sm font-medium text-gray-700">
-									Tx Spot - Compra (%)
-								</Label>
-								<Input
-									id="txSpotCompra"
-									type="number"
-									step="0.0001"
-									value={txSpotCompra}
-									onChange={(e) => setTxSpotCompra(e.target.value)}
-									placeholder="0,0"
-									className="border-gray-300 focus:border-gray-400"
-								/>
-							</div>
-							<div className="space-y-2">
-								<Label htmlFor="txFuturaVenc" className="text-sm font-medium text-gray-700">
-									Tx Futura - Venc (%)
-								</Label>
-								<Input
-									id="txFuturaVenc"
-									type="number"
-									step="0.0001"
-									value={txFuturaVenc}
-									readOnly
-									placeholder="Calculado automaticamente"
-									className="bg-gray-50 border-gray-200 text-gray-600"
-								/>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
-
-				{/* SEÇÃO 3: TABELA DE MOVIMENTOS (conforme estrutura da planilha Excel) */}
-				<Card className="mb-6 shadow-sm">
-					<CardHeader className="bg-gray-50 border-b">
-						<div className="flex items-center gap-2">
-							<svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-								<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-							</svg>
-							<CardTitle className="text-lg font-semibold text-gray-900">Data Movimento</CardTitle>
-						</div>
-						<CardDescription className="text-gray-600">
-							Histórico de movimentos financeiros e cálculo de encargos
-						</CardDescription>
-					</CardHeader>
-					<CardContent className="pt-6">
-						{parcelsError && (
-							<Alert variant="destructive" className="mb-4">
-								<AlertDescription>Falha ao buscar movimentos do Conexos: {parcelsError}</AlertDescription>
-							</Alert>
-						)}
-
-						<div className="overflow-x-auto">
-							<table className="w-full border-collapse border border-gray-200">
-								<thead>
-									<tr className="bg-gray-700 text-white">
-										<th className="px-3 py-2 text-left text-xs font-medium border border-gray-600">
-											Data Movimento
-										</th>
-										<th className="px-3 py-2 text-left text-xs font-medium border border-gray-600">
-											Histórico
-										</th>
-										<th className="px-3 py-2 text-center text-xs font-medium border border-gray-600">
-											Dias
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Tx Ptax D.I
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Tx Spot - Compra
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Tx Futura - Venc
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Valor
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Encargos
-										</th>
-										<th className="px-3 py-2 text-right text-xs font-medium border border-gray-600">
-											Total
-										</th>
-										<th className="px-3 py-2 text-center text-xs font-medium border border-gray-600 w-10">
-											Ações
-										</th>
-									</tr>
-								</thead>
-								<tbody>
-									{/* Linha de entrada manual para Despesas */}
-									<tr className="bg-blue-50/50">
-										<td className="px-2 py-2 border border-blue-100">
-											<Input
-												type="date"
-												value={newExpData}
-												onChange={(e) => setNewExpData(e.target.value)}
-												className="h-8 text-xs border-blue-200 focus:border-blue-300"
-											/>
-										</td>
-										<td className="px-2 py-2 border border-blue-100 italic text-xs text-blue-600">
-											Despesas (Automático)
-										</td>
-										<td className="px-2 py-2 border border-blue-100">
-											<Input
-												type="number"
-												placeholder="Dias"
-												value={newExpDias}
-												onChange={(e) => setNewExpDias(e.target.value)}
-												className="h-8 text-xs border-blue-200 focus:border-blue-300 text-center"
-											/>
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
-											-
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
-											-
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-center text-xs text-gray-400">
-											-
-										</td>
-										<td className="px-2 py-2 border border-blue-100">
-											<Input
-												type="text"
-												placeholder="Valor USD"
-												value={newExpValor}
-												onChange={(e) => setNewExpValor(e.target.value)}
-												onBlur={(e) => {
-													const formatted = formatCurrencyInput(e.target.value);
-													if (formatted) setNewExpValor(formatted);
-												}}
-												className="h-8 text-xs border-blue-200 focus:border-blue-300"
-											/>
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-right text-xs text-blue-700 font-medium">
-											{newExpValor && newExpDias && txFuturaVenc && txPtaxDI ? formatCurrency(calculateChargesLocally(parseCurrencyInput(newExpValor), parseInt(newExpDias, 10))) : "-"}
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-right text-xs text-blue-900 font-bold">
-											{newExpValor && newExpDias && txFuturaVenc && txPtaxDI
-												? formatCurrency(parseCurrencyInput(newExpValor) + calculateChargesLocally(parseCurrencyInput(newExpValor), parseInt(newExpDias, 10)))
-												: "-"}
-										</td>
-										<td className="px-2 py-2 border border-blue-100 text-center">
-											<Button
-												size="sm"
-												onClick={handleAddExpense}
-												className="h-8 bg-[#337ab7] hover:bg-blue-800 text-xs px-2"
-											>
-												Adicionar
-											</Button>
-										</td>
-									</tr>
-
-									{payments.length > 0 ? (
-										payments.map((payment, index) => (
-											<tr
-												key={payment.id}
-												className={index % 2 === 0 ? "bg-white" : "bg-gray-50"}
-											>
-												<td className="px-3 py-2 border border-gray-200 text-xs">
-													{new Date(payment.paymentDate).toLocaleDateString("pt-BR")}
-												</td>
-												<td className="px-3 py-2 border border-gray-200">
-													<div className="flex flex-col gap-1">
-														<span className="text-sm font-medium text-gray-900">{payment.description}</span>
-													</div>
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-center text-xs">
-													<div className="flex items-center justify-center gap-1">
-														<span className="font-semibold text-gray-900">{payment.days}</span>
-														<span className="text-[10px] text-gray-400 italic">dias</span>
-													</div>
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
-													{txPtaxDI ? formatRate(txPtaxDI) : "-"}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
-													{txSpotCompra ? formatRate(txSpotCompra) : "-"}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
-													{txFuturaVenc ? formatRate(txFuturaVenc) : "-"}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs">
-													{formatCurrency(payment.value)}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-blue-700 font-medium">
-													{formatCurrency(calculateChargesLocally(payment.value, payment.days || 0))}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-right text-xs text-gray-900 font-bold">
-													{formatCurrency(payment.value + calculateChargesLocally(payment.value, payment.days || 0))}
-												</td>
-												<td className="px-3 py-2 border border-gray-200 text-center">
-													<Button
-														variant="ghost"
-														size="sm"
-														onClick={() => handleRemovePayment(payment.id)}
-														className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-													>
-														<svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-															<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-														</svg>
-													</Button>
-												</td>
-											</tr>
-										))
-									) : (
-										<tr>
-											<td colSpan={10} className="px-4 py-8 text-center text-gray-500 border border-gray-200">
-												<div className="flex flex-col items-center gap-2">
-													<svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-														<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-													</svg>
-													<p className="text-sm font-medium">Nenhum movimento cadastrado</p>
-													<p className="text-xs text-gray-400">Adicione pagamentos para calcular os encargos</p>
-												</div>
-											</td>
-										</tr>
-									)}
-								</tbody>
-								{payments.length > 0 && (
-									<tfoot>
-										<tr className="bg-gray-100 border-t-2 border-gray-300">
-											<td colSpan={6} className="px-3 py-2 text-right font-semibold text-gray-900 text-sm border border-gray-200">
-												TOTAIS:
-											</td>
-											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
-												{formatCurrency(payments.reduce((sum, p) => sum + p.value, 0))}
-											</td>
-											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
-												{formatCurrency(
-													payments.reduce((sum, p) => sum + calculateChargesLocally(p.value, p.days || 0), 0)
-												)}
-											</td>
-											<td className="px-3 py-2 text-right font-medium text-gray-900 text-sm border border-gray-200">
-												{formatCurrency(
-													payments.reduce((sum, p) => sum + p.value + calculateChargesLocally(p.value, p.days || 0), 0)
-												)}
-											</td>
-											<td className="px-3 py-2 border border-gray-200 bg-gray-50"></td>
-										</tr>
-									</tfoot>
-								)}
-							</table>
-						</div>
-
-						{/* CDI Display (conforme planilha) */}
-						<div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-							<div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg p-3">
-								<div className="flex items-center gap-2">
-									<svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-									</svg>
-									<span className="text-sm font-semibold text-gray-700">CDI ao Ano:</span>
-								</div>
-								<span className="text-xl font-bold text-gray-900">{formatRate(cdiAoAno)}%</span>
-							</div>
-							<div className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-lg p-3">
-								<div className="flex items-center gap-2">
-									<svg className="w-4 h-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-									</svg>
-									<span className="text-sm font-semibold text-gray-700">CDI A.M:</span>
-								</div>
-								<span className="text-xl font-bold text-gray-900">{formatRate(cdiAM)}%</span>
-							</div>
+						<div className="bg-blue-50 p-4 rounded-lg mb-4">
+							<p className="text-sm font-semibold mb-2">Fórmula:</p>
+							<p className="text-sm font-mono">
+								Encargo = (Valor Moeda Nacional × Prazo em dias) ÷ (CDI diária)
+							</p>
+							<p className="text-xs text-gray-600 mt-1">
+								Onde: CDI Diária = CDI ao ano ÷ 360
+							</p>
 						</div>
 
 						<Button
 							onClick={handleCalculate}
-							disabled={calculating || payments.length === 0}
-							className="w-full mt-6 bg-[#337ab7] hover:bg-blue-800 h-12"
+							className="w-full mb-4"
 							size="lg"
+							disabled={!formState.cdiAoAno || formState.prazoEmDias <= 0}
 						>
-							{calculating ? (
-								<>
-									<Spinner className="w-5 h-5 mr-2" />
-									Calculando...
-								</>
-							) : (
-								"Calcular Encargos Financeiros"
-							)}
+							Calcular Encargos
 						</Button>
 
-						{/* SEÇÃO 3.1: DESPESAS EXISTENTES NO CONEXOS */}
-						{process && process.expenses && process.expenses.length > 0 && (
-							<div className="mt-8 border-t pt-6">
-								<div className="flex items-center gap-2 mb-4">
-									<svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-										<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-									</svg>
-									<h3 className="text-md font-semibold text-gray-800">Despesas atuais no Conexos</h3>
-								</div>
-								<div className="overflow-x-auto rounded-md border border-gray-200">
-									<table className="w-full text-sm">
-										<thead className="bg-gray-50 text-gray-500">
-											<tr>
-												<th className="px-3 py-2 text-left font-medium">Tipo</th>
-												<th className="px-3 py-2 text-left font-medium">Histórico</th>
-												<th className="px-3 py-2 text-right font-medium">Valor (BRL)</th>
-											</tr>
-										</thead>
-										<tbody className="divide-y divide-gray-100 italic">
-											{process.expenses.map((d: any, i: number) => {
-												const isFinancial = (d.impDesNome || d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS');
-												return (
-													<tr key={i} className={isFinancial ? "bg-yellow-50/50" : ""}>
-														<td className="px-3 py-2 text-gray-600">{d.ctpDesNome || d.tipo || '—'}</td>
-														<td className="px-3 py-2 text-gray-800 font-medium">
-															{d.impDesNome || d.descricao || '—'}
-															{isFinancial && <span className="ml-2 text-[10px] bg-yellow-100 text-yellow-700 px-1 rounded font-bold">EXISTENTE</span>}
-														</td>
-														<td className="px-3 py-2 text-right font-semibold">
-															{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.pidMnyValormn || d.valor || 0)}
-														</td>
-													</tr>
-												);
-											})}
-										</tbody>
-									</table>
+						{formState.encargosCalculados > 0 && (
+							<div className="bg-green-50 p-4 rounded-lg">
+								<p className="text-sm font-semibold mb-1">Encargos Calculados:</p>
+								<p className="text-2xl font-bold text-green-700">
+									{new Intl.NumberFormat('pt-BR', {
+										style: 'currency',
+										currency: 'BRL'
+									}).format(formState.encargosCalculados)}
+								</p>
+								<div className="mt-2 text-sm text-gray-600">
+									<p>CDI Diária: {formState.cdiAoAno ? (formState.cdiAoAno / 360).toFixed(6) : '0'}%</p>
+									<p>Prazo: {formState.prazoEmDias} dias</p>
+									<p>Base: {new Intl.NumberFormat('pt-BR', {
+										style: 'currency',
+										currency: 'BRL'
+									}).format(formState.valorMoedaNacional)}</p>
 								</div>
 							</div>
 						)}
 					</CardContent>
 				</Card>
 
-				{/* Error Alert */}
-				{error && (
-					<Alert variant="destructive" className="mb-6">
-						<AlertDescription>{error}</AlertDescription>
-					</Alert>
-				)}
+				{/* Ações */}
+				<div className="flex gap-4">
+					<Button
+						onClick={handleSubmit}
+						disabled={formState.encargosCalculados <= 0 || submitting}
+						className="flex-1"
+						size="lg"
+					>
+						{submitting ? <Spinner className="w-4 h-4 mr-2" /> : null}
+						Enviar para Conexos
+					</Button>
+					<Button
+						variant="outline"
+						onClick={handlePrint}
+						size="lg"
+					>
+						Exportar PDF
+					</Button>
+				</div>
 
-				{/* SEÇÃO 4: RESULTADOS DO CÁLCULO */}
-				{result && (
-					<Card className="shadow-sm">
-						<CardHeader className="bg-gray-50 border-b">
-							<div className="flex items-center gap-2">
-								<svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-									<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-								</svg>
-								<CardTitle className="text-lg font-semibold text-gray-900">
-									Resultado do Cálculo de Encargos Financeiros
-								</CardTitle>
-							</div>
-							<CardDescription className="text-gray-600">
-								Calculado em {result?.summary?.calculationDate ? new Date(result.summary.calculationDate).toLocaleString("pt-BR") : "—"}
-							</CardDescription>
+				{/* Tabela de Despesas Existentes */}
+				{process.expenses && process.expenses.length > 0 && (
+					<Card className="mt-6">
+						<CardHeader>
+							<CardTitle>Despesas Atuais no Conexos</CardTitle>
 						</CardHeader>
-						<CardContent className="pt-6">
-							{/* RESUMO PRINCIPAL */}
-							<div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-								<Card className="shadow-sm border-l-4 border-l-blue-500">
-									<CardHeader className="pb-2">
-										<CardDescription className="text-gray-600 text-xs">Total Desembolsos</CardDescription>
-									</CardHeader>
-									<CardContent>
-										<p className="text-2xl font-bold text-gray-900">
-											{formatCurrency(result.totalDisburse)}
-										</p>
-									</CardContent>
-								</Card>
-
-								<Card className="shadow-sm border-l-4 border-l-green-500">
-									<CardHeader className="pb-2">
-										<CardDescription className="text-gray-600 text-xs">Total Juros (Contrato)</CardDescription>
-									</CardHeader>
-									<CardContent>
-										<p className="text-2xl font-bold text-gray-900">
-											{formatCurrency(result.totalInterest)}
-										</p>
-									</CardContent>
-								</Card>
-
-								<Card className="shadow-sm border-l-4 border-l-orange-500 bg-orange-50/30">
-									<CardHeader className="pb-2">
-										<CardDescription className="text-gray-600 text-xs">Total Encargos</CardDescription>
-									</CardHeader>
-									<CardContent>
-										<p className="text-2xl font-bold text-gray-900">
-											{formatCurrency(result.totalCharges)}
-										</p>
-									</CardContent>
-								</Card>
-							</div>
-
-							{/* DESPESAS EXISTENTES NO CONEXOS */}
-							{result.despesas && result.despesas.length > 0 && (
-								<div className="mb-6">
-									<h3 className="text-sm font-semibold mb-3 text-gray-900">
-										Despesas Existentes no Conexos
-									</h3>
-									<div className="border border-gray-200 rounded-lg overflow-hidden">
-										<table className="w-full text-sm">
-											<thead className="bg-gray-700 text-white">
-												<tr>
-													<th className="px-3 py-2 text-left font-medium">Tipo</th>
-													<th className="px-3 py-2 text-left font-medium">Descrição</th>
-													<th className="px-3 py-2 text-right font-medium">Valor (BRL)</th>
-												</tr>
-											</thead>
-											<tbody className="divide-y divide-gray-100 italic">
-												{result.despesas.map((d: any, i: number) => {
-													const isFinancial = (d.descricao || '').toUpperCase().includes('ENCARGOS FINANCEIROS');
-													return (
-														<tr key={i} className={isFinancial ? "bg-yellow-50" : ""}>
-															<td className="px-3 py-2 text-gray-600">{d.tipo}</td>
-															<td className="px-3 py-2 text-gray-800 font-medium">
-																{d.descricao}
-																{isFinancial && <span className="ml-2 text-[8px] bg-yellow-100 text-yellow-700 px-1 rounded font-bold">ALERTA</span>}
-															</td>
-															<td className="px-3 py-2 text-right font-semibold">
-																{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(d.valor || 0)}
-															</td>
-														</tr>
-													);
-												})}
-											</tbody>
-										</table>
-									</div>
-								</div>
-							)}
-
-							<Separator className="my-6" />
-
-							{/* PARÂMETROS UTILIZADOS */}
-							<div className="bg-gray-50 rounded-lg p-4 mb-6 border border-gray-200">
-								<h3 className="text-sm font-semibold mb-3 text-gray-900">
-									Parâmetros Utilizados
-								</h3>
-								<div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-									<div>
-										<p className="text-xs text-gray-600 mb-1">CDI ao Ano</p>
-										<p className="font-semibold text-sm text-gray-900">{formatRate(cdiAoAno)}%</p>
-									</div>
-									<div>
-										<p className="text-xs text-gray-600 mb-1">Tx Spot - Compra</p>
-										<p className="font-semibold text-sm text-gray-900">{formatRate(result.summary.taxaConexos)}%</p>
-									</div>
-									<div>
-										<p className="text-xs text-gray-600 mb-1">Taxa Efetiva</p>
-										<p className="font-semibold text-sm text-gray-900">
-											{result.summary.effectiveRate ? formatRate(result.summary.effectiveRate * 100) : '0,0'}%
-										</p>
-									</div>
-									<div>
-										<p className="text-xs text-gray-600 mb-1">Prazo</p>
-										<p className="font-semibold text-sm text-gray-900">
-											{prazo ? format(prazo, "dd/MM/yyyy", { locale: ptBR }) : "-"}
-										</p>
-									</div>
-									<div>
-										<p className="text-xs text-gray-600 mb-1">Dias</p>
-										<p className="font-semibold text-sm text-gray-900">
-											{dias || "-"}
-										</p>
-									</div>
-								</div>
-							</div>
-
-							{/* DETALHAMENTO POR MOVIMENTO */}
-							<div className="mb-6">
-								<h3 className="text-sm font-semibold mb-3 text-gray-900">
-									Detalhamento por Movimento (Contrato / Despesas)
-								</h3>
-								<div className="border border-gray-200 rounded-lg overflow-hidden">
-									<table className="w-full">
-										<thead className="bg-gray-700 text-white">
-											<tr>
-												<th className="text-left px-3 py-2 text-xs font-medium">Histórico</th>
-												<th className="text-right px-3 py-2 text-xs font-medium">Valor</th>
-												<th className="text-center px-3 py-2 text-xs font-medium">Dias</th>
-												<th className="text-center px-3 py-2 text-xs font-medium">Taxa</th>
-												<th className="text-right px-3 py-2 text-xs font-medium">Encargos</th>
-												<th className="text-right px-3 py-2 text-xs font-medium">Total</th>
-											</tr>
-										</thead>
-										<tbody>
-											{(result.movimentos || []).map((m: any, index: number) => {
-												return (
-													<tr
-														key={index}
-														className={`${index % 2 === 0 ? "bg-white" : "bg-gray-50"}`}
-													>
-														<td className="px-3 py-2 border-t border-gray-200">
-															<p className="text-sm font-medium text-gray-900">{m.historico}</p>
-														</td>
-														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm">
-															{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' }).format(m.valorUSD)}
-														</td>
-														<td className="px-3 py-2 border-t border-gray-200 text-center">
-															<span className="bg-gray-100 text-gray-800 px-2 py-1 rounded text-xs font-medium">
-																{m.diasCorridos} dias
-															</span>
-														</td>
-														<td className="px-3 py-2 border-t border-gray-200 text-center text-xs">
-															{formatRate(m.txSpot)}%
-														</td>
-														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
-															{formatCurrency(m.encargos)}
-														</td>
-														<td className="px-3 py-2 border-t border-gray-200 text-right font-semibold text-sm text-gray-900">
-															{formatCurrency(m.total)}
-														</td>
-													</tr>
-												);
-											})}
-										</tbody>
-										<tfoot className="bg-gray-100 border-t-2 border-gray-300">
-											<tr>
-												<td className="px-3 py-3 text-right font-bold text-sm text-gray-900" colSpan={4}>
-													TOTAIS A COBRAR (ENCARGOS):
-												</td>
-												<td className="px-3 py-3 text-right font-bold text-base text-gray-900">
-													{formatCurrency(result.totalInterest)}
-												</td>
-												<td className="px-3 py-3 text-right font-bold text-base text-gray-900">
-													{formatCurrency(result.totalCharges)}
-												</td>
-											</tr>
-										</tfoot>
-									</table>
-								</div>
-							</div>
-
-							{/* AÇÕES */}
-							<div className="flex gap-3">
-								<Button
-									onClick={handleSubmit}
-									disabled={submitting}
-									className="flex-1 bg-[#337ab7] hover:bg-blue-800 h-11"
-									size="lg"
-								>
-									{submitting ? (
-										<>
-											<Spinner className="w-4 h-4 mr-2" />
-											Enviando...
-										</>
-									) : (
-										"Enviar para o Conexos"
-									)}
-								</Button>
-								<Button
-									variant="outline"
-									size="lg"
-									onClick={generatePDF}
-									className="h-11"
-								>
-									Exportar PDF
-								</Button>
-							</div>
+						<CardContent>
+							<table className="w-full">
+								<thead>
+									<tr className="bg-gray-100">
+										<th className="p-2 text-left text-sm">Tipo</th>
+										<th className="p-2 text-left text-sm">Descrição</th>
+										<th className="p-2 text-right text-sm">Valor (BRL)</th>
+									</tr>
+								</thead>
+								<tbody>
+									{process.expenses.map((exp: any, i: number) => (
+										<tr key={i} className="border-t">
+											<td className="p-2 text-sm">{exp.ctpDesNome}</td>
+											<td className="p-2 text-sm">{exp.impDesNome}</td>
+											<td className="p-2 text-right text-sm font-semibold">
+												{new Intl.NumberFormat('pt-BR', {
+													style: 'currency',
+													currency: 'BRL'
+												}).format(exp.pidMnyValormn || 0)}
+											</td>
+										</tr>
+									))}
+								</tbody>
+							</table>
 						</CardContent>
 					</Card>
 				)}
 			</div>
-		</ProtectedRoute >
+		</ProtectedRoute>
 	);
 }
