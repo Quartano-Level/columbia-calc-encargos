@@ -1036,6 +1036,41 @@ class ConexosService {
     if (excluded.length > 0 && excluded.length <= 10) {
       console.log(`[getProcessesForExport]   priCods excluídos: ${excluded.join(', ')}`);
     }
+
+    // 5. Validar docCods na com297 (apenas documentos FINALIZADOS da tela de Contratos de Câmbio)
+    console.log('[getProcessesForExport] 5/5 Validando docCods na com297...');
+    const allDocCods: number[] = [];
+    for (const proc of processesForExport) {
+      for (const title of (proc.payments || [])) {
+        if (title.docCod != null) allDocCods.push(Number(title.docCod));
+      }
+    }
+    const uniqueDocCods = [...new Set(allDocCods)];
+
+    let validDocCods: Set<number>;
+    if (uniqueDocCods.length > 0) {
+      validDocCods = await this.getValidDocCodesFromCom297(uniqueDocCods, filCod);
+    } else {
+      validDocCods = new Set();
+    }
+
+    // Filtrar payments de cada processo para conter apenas docCods válidos da com297
+    let totalFiltrados = 0;
+    for (const proc of processesForExport) {
+      const antes = (proc.payments || []).length;
+      proc.payments = (proc.payments || []).filter((t: any) => {
+        if (t.docCod == null) return false; // sem docCod: excluir
+        return validDocCods.has(Number(t.docCod));
+      });
+      const depois = proc.payments.length;
+      const filtrados = antes - depois;
+      if (filtrados > 0) {
+        console.log(`[getProcessesForExport]   Processo ${proc.priCod}: ${filtrados} título(s) removido(s) por não estar na com297`);
+        totalFiltrados += filtrados;
+      }
+    }
+    console.log(`[getProcessesForExport] com297: ${totalFiltrados} título(s) filtrado(s) no total`);
+
     console.log('★★★ FIM EXPORT ★★★\n');
 
     return { processes: processesForExport };
@@ -1231,6 +1266,64 @@ class ConexosService {
         }
       }
       return [];
+    }
+  }
+
+  /**
+   * Valida quais docCods existem na com297 com status FINALIZADO (vldStatus=3).
+   * Usada para filtrar títulos do psq015, garantindo que apenas documentos
+   * originados da tela com_297 (Contratos de Câmbio) sejam incluídos no relatório.
+   * @param docCods Lista de docCods a verificar
+   * @param filCod Filial
+   * @returns Set de docCods válidos; em caso de erro, retorna o set completo (fail-open)
+   */
+  async getValidDocCodesFromCom297(docCods: number[], filCod: number = 2): Promise<Set<number>> {
+    if (!docCods || docCods.length === 0) return new Set();
+
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ["docCod"],
+      filterList: {
+        "docCod#IN": docCods,
+        "vldStatus#IN": ["3"]
+      },
+      pageNumber: 1,
+      pageSize: docCods.length + 10,
+      serviceName: "com297",
+      orderList: { orderList: [{ propertyName: "docCod", order: "desc" }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': '97',
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/com297/list';
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || [];
+      const validSet = new Set<number>(rows.map((r: any) => Number(r.docCod)));
+      console.log(`[com297] Verificados ${docCods.length} docCods → ${validSet.size} válidos (status FINALIZADO)`);
+      return validSet;
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        try {
+          const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+          const rows = retryResp.data?.rows || [];
+          return new Set<number>(rows.map((r: any) => Number(r.docCod)));
+        } catch (retryErr) {
+          console.warn('[com297] Falha no retry - mantendo todos os títulos');
+          return new Set(docCods);
+        }
+      }
+      console.warn('[com297] Erro ao verificar docCods - mantendo todos os títulos:', err.message);
+      return new Set(docCods); // fail-open: em caso de erro, não filtra
     }
   }
 
