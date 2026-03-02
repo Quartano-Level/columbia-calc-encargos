@@ -114,12 +114,16 @@ export function AppLayout({ children }: AppLayoutProps) {
 							<AlertTriangle size={18} />
 							Análise de Atrasos
 						</button>
-						{/* <nav className="space-y-2">
-							<button className="w-full text-left px-4 py-2.5 text-gray-600 hover:bg-gray-50 rounded-lg flex items-center gap-2 transition">
-								<Settings size={18} />
-								Configurações
-							</button>
-						</nav> */}
+						<button
+							onClick={() => router.push("/settings")}
+							className={`w-full font-medium py-2.5 px-4 rounded-lg flex items-center gap-2 mb-4 transition ${isActive("/settings")
+								? "bg-[#337ab7] text-white"
+								: "text-gray-600 hover:bg-gray-50"
+								}`}
+						>
+							<Settings size={18} />
+							Configurações
+						</button>
 					</div>
 					{user && (
 						<button
