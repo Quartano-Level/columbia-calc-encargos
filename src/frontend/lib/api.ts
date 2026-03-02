@@ -106,7 +106,32 @@ export async function fetchAllProcesses(): Promise<{ processes: any[] }> {
 	return data?.data || { processes: [] };
 }
 
-/** Processos para exportação: docs em baixa OU sem contrato mas com encargo financeiro (legado) */
+/** V2: Processos para exportação baseada em NFs (com297 → com311 → com017) */
+export async function fetchProcessesForExportV2(filCod?: number): Promise<{ processes: any[] }> {
+	const url = filCod
+		? `${API_BASE_URL}/processes/for-export-v2?filCod=${filCod}`
+		: `${API_BASE_URL}/processes/for-export-v2`;
+	if (!API_BASE_URL) {
+		throw new Error("NEXT_PUBLIC_API_URL não configurado.");
+	}
+	const response = await fetch(url, {
+		method: "GET",
+		headers: { "Accept": "application/json" },
+	});
+	if (!response.ok) {
+		let errMsg = `API Error: ${response.status}`;
+		try {
+			const body = await response.json();
+			if (body?.error) errMsg = body.error;
+			if (body?.details) errMsg += ` - ${body.details}`;
+		} catch { /* ignore */ }
+		throw new Error(errMsg);
+	}
+	const data = await response.json();
+	return data?.data || { processes: [] };
+}
+
+/** @deprecated Use fetchProcessesForExportV2 */
 export async function fetchProcessesForExport(filCod?: number): Promise<{ processes: any[] }> {
 	const url = filCod
 		? `${API_BASE_URL}/processes/for-export?filCod=${filCod}`
@@ -252,6 +277,24 @@ export async function calculateCharges(id: string, input: CalculationInput): Pro
 }
 
 
+/** Busca série histórica CDI diária do BCB para um período */
+export async function fetchBCBCDIHistory(
+	startDate: string,
+	endDate: string
+): Promise<Array<{ date: string; dailyRate: number }>> {
+	try {
+		const response = await fetch(
+			`${API_BASE_URL}/bcb/cdi?startDate=${startDate}&endDate=${endDate}`,
+			{ method: "GET", headers: { "Accept": "application/json" } }
+		);
+		if (!response.ok) return [];
+		const data = await response.json();
+		return Array.isArray(data?.data) ? data.data : [];
+	} catch {
+		return [];
+	}
+}
+
 export async function fetchBCBLatestCDI(): Promise<BCBAnnualizedCDI | null> {
 	try {
 		const response = await fetch(`${API_BASE_URL}/bcb/cdi/latest`, {
@@ -305,6 +348,98 @@ export async function fetchEnrichedContractData(priCod: number, imcCod: number):
 	if (!response.ok) throw new Error(`API Error: ${response.status}`);
 	const data = await response.json();
 	return data?.data || null;
+}
+
+export interface AppSettings {
+	filial_padrao: string;
+	fonte_cdi: 'bcb' | 'conexos';
+	cdi_manual: string;
+}
+
+export async function fetchSettings(): Promise<AppSettings> {
+	const response = await fetch(`${API_BASE_URL}/settings`, {
+		headers: { Accept: 'application/json' },
+	});
+	if (!response.ok) throw new Error(`API Error: ${response.status}`);
+	const json = await response.json();
+	return json.data as AppSettings;
+}
+
+export async function updateSettings(settings: Partial<AppSettings>): Promise<void> {
+	const response = await fetch(`${API_BASE_URL}/settings`, {
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+		body: JSON.stringify(settings),
+	});
+	if (!response.ok) throw new Error(`API Error: ${response.status}`);
+}
+
+export interface MonthlySummary {
+	month: string;        // "YYYY-MM"
+	totalEncargos: number;
+	count: number;
+	submitted: number;
+}
+
+export async function fetchCalculationsSummary(months = 6): Promise<MonthlySummary[]> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/calculations/summary?months=${months}`, {
+			headers: { Accept: 'application/json' },
+		});
+		if (!response.ok) return [];
+		const data = await response.json();
+		return Array.isArray(data?.data) ? data.data : [];
+	} catch {
+		return [];
+	}
+}
+
+/** Busca o total de Valor a Permutar (mnyTitPermutar) da INOX Tech (pesCod=191) via com299 */
+export async function fetchValorPermutar(): Promise<number> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/com299/valor-permutar`, {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const msg = data?.error || data?.details || `HTTP ${response.status}`;
+      throw new Error(`Valor a Permutar: ${msg}`);
+    }
+    return Number(data?.data?.valorPermutar ?? 0);
+  } catch (err: any) {
+    if (err?.message?.startsWith('Valor a Permutar:')) throw err;
+    throw new Error(`Valor a Permutar: ${err?.message || 'Erro de rede'}`);
+  }
+}
+
+export interface Com299Row {
+  docCod: number;
+  mnyBruto: number;
+  mnyAcrescimo: number;
+  mnyDesconto: number;
+  mnyTitValor: number;
+  mnyTitPago: number;
+  mnyTitPermuta: number;
+  mnyTitAberto: number;
+  mnyTitPermutar: number;
+}
+
+/** Busca lista completa com299 (INOX Tech) para exportação */
+export async function fetchCom299List(): Promise<Com299Row[]> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/com299/list`, {
+      headers: { Accept: 'application/json' },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const msg = data?.error || data?.details || `HTTP ${response.status}`;
+      throw new Error(`Lista com299: ${msg}`);
+    }
+    return Array.isArray(data?.data?.rows) ? data.data.rows : [];
+  } catch (err: any) {
+    if (err?.message?.startsWith('Lista com299:')) throw err;
+    throw new Error(`Lista com299: ${err?.message || 'Erro de rede'}`);
+  }
 }
 
 export async function submitToConexos(id: string, result: CalculationResult & { clientName: string }): Promise<{ success: boolean; message: string }> {
