@@ -12,6 +12,7 @@ import {
 	calculateCharges,
 	submitToConexos,
 } from "@/lib/api";
+import { calcularEncargos, calcularVariacaoCambial } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -151,16 +152,18 @@ export default function ProcessCalculatorPage() {
 		const nomeCliente = proc.dpeNomPessoa || raw.dpeNomPessoa || proc.clientName || '';
 		const incoterm = proc.incoterm || raw.incoterm || raw.incEspSigla || '';
 
-		// Moeda e Valores: priorizar campos do processo
-		const moedaNegociada = proc.currency || raw.moeEspNome || 'USD';
-		const valorMoedaNegociada = Number(proc.mercadoriasValue || raw.vlrMneg || 0);
-		const valorMoedaNacional = Number(raw.vlrTotalNac || raw.vlrMnac || proc.mercadoriasValue || 0);
+		// Moeda e Valores: usar dados do CONTRATO (mesmos campos da planilha/PDF)
+		const moedaNegociada = contract.moeEspNome || proc.currency || raw.moeEspNome || 'USD';
+		const valorMoedaNegociada = Number(contract.vlrMneg || 0);
+		const valorMoedaNacional = Number(contract.vlrTotalNac || 0);
 
 		// Deck 2: Contract Information
 		const dataFechamento = contract.imcDtaFechamento
 			? new Date(contract.imcDtaFechamento).toISOString().split('T')[0]
 			: '';
-		const dataFaturamento = ''; // Será implementado depois
+		const dataFaturamento = contract.dataFaturamento
+			? new Date(contract.dataFaturamento).toISOString().split('T')[0]
+			: '';
 
 		// Deck 3: Contract Rates
 		const taxaFechamento = contract.imcFltTxFec || null;
@@ -207,7 +210,8 @@ export default function ProcessCalculatorPage() {
 			if (latestCDI) {
 				setFormState(prev => ({
 					...prev,
-					cdiAoAno: latestCDI.annualRate
+					cdiAoAno: latestCDI.annualRate,
+					cdiMensal: latestCDI.monthlyRate,
 				}));
 			} else {
 				setError('Erro ao buscar CDI do BCB');
@@ -221,20 +225,31 @@ export default function ProcessCalculatorPage() {
 	}
 
 	function handleCalculate() {
-		// Nova fórmula: Encargo = (Valor Moeda Nacional × Prazo em dias) / (CDI diária)
-		// Onde CDI Diária = CDI ao ano / 360
-
 		if (!formState.cdiAoAno || formState.prazoEmDias <= 0 || formState.valorMoedaNacional <= 0) {
 			setError('Preencha todos os campos obrigatórios: CDI ao Ano, Prazo em Dias e Valor Moeda Nacional');
 			return;
 		}
 
-		const cdiDiaria = formState.cdiAoAno / 360;
-		const encargo = (formState.valorMoedaNacional * formState.prazoEmDias) / cdiDiaria;
+		const encargo = calcularEncargos(
+			formState.valorMoedaNacional,
+			formState.cdiAoAno,
+			formState.prazoEmDias,
+		);
+
+		// Variação Cambial: calculada quando Ptax DI e Taxa Fechamento estão disponíveis
+		let variacaoCambial: number | undefined;
+		if (formState.taxaPtaxDI && formState.taxaFechamento && formState.valorMoedaNegociada > 0) {
+			variacaoCambial = calcularVariacaoCambial(
+				formState.valorMoedaNegociada,
+				formState.taxaPtaxDI,
+				formState.taxaFechamento,
+			);
+		}
 
 		setFormState(prev => ({
 			...prev,
-			encargosCalculados: encargo
+			encargosCalculados: encargo,
+			variacaoCambial,
 		}));
 
 		setError(null);
@@ -270,6 +285,10 @@ export default function ProcessCalculatorPage() {
 					effectiveRate: 0,
 				},
 				clientName: formState.nomeCliente,
+				movimentos: [],
+				...(formState.variacaoCambial !== undefined && {
+					despesas: [{ tipo: 'cambial', descricao: 'Variação Cambial', valor: formState.variacaoCambial }],
+				}),
 			};
 
 			await submitToConexos(processId, dataToSubmit);
@@ -385,28 +404,6 @@ export default function ProcessCalculatorPage() {
 									className="bg-gray-50"
 								/>
 							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Valor Moeda Negociada</Label>
-								<Input
-									value={new Intl.NumberFormat('pt-BR', {
-										minimumFractionDigits: 2,
-										maximumFractionDigits: 2
-									}).format(formState.valorMoedaNegociada)}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Valor Moeda Nacional (BRL)</Label>
-								<Input
-									value={new Intl.NumberFormat('pt-BR', {
-										style: 'currency',
-										currency: 'BRL'
-									}).format(formState.valorMoedaNacional)}
-									disabled
-									className="bg-gray-50 font-semibold"
-								/>
-							</div>
 						</div>
 					</CardContent>
 				</Card>
@@ -428,18 +425,16 @@ export default function ProcessCalculatorPage() {
 								/>
 							</div>
 							<div>
-								<Label className="text-sm text-gray-600">Data Faturamento (Invoice/Proforma)</Label>
+								<Label className="text-sm text-gray-600">Data Faturamento (Invoice/Proforma) *</Label>
 								<Input
 									type="date"
 									value={formState.dataFaturamento}
-									disabled
-									className="bg-gray-50"
+									onChange={(e) => setFormState(prev => ({
+										...prev,
+										dataFaturamento: e.target.value
+									}))}
+									className="border-blue-400"
 								/>
-								{!formState.dataFaturamento && (
-									<p className="text-xs text-orange-600 mt-1">
-										⚠ Data de faturamento não disponível no Conexos
-									</p>
-								)}
 							</div>
 							<div>
 								<Label className="text-sm text-gray-600">Prazo (em dias) *</Label>
@@ -461,6 +456,28 @@ export default function ProcessCalculatorPage() {
 									value={formState.vencimentoCliente}
 									disabled
 									className="bg-green-50"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Vlr. Contrato ({formState.moedaNegociada})</Label>
+								<Input
+									value={new Intl.NumberFormat('pt-BR', {
+										minimumFractionDigits: 2,
+										maximumFractionDigits: 2
+									}).format(formState.valorMoedaNegociada)}
+									disabled
+									className="bg-gray-50"
+								/>
+							</div>
+							<div>
+								<Label className="text-sm text-gray-600">Vlr. Nacional (BRL)</Label>
+								<Input
+									value={new Intl.NumberFormat('pt-BR', {
+										style: 'currency',
+										currency: 'BRL'
+									}).format(formState.valorMoedaNacional)}
+									disabled
+									className="bg-gray-50 font-semibold"
 								/>
 							</div>
 						</div>
@@ -595,16 +612,16 @@ export default function ProcessCalculatorPage() {
 						<div className="bg-blue-50 p-4 rounded-lg mb-4">
 							<p className="text-sm font-semibold mb-2">Fórmula:</p>
 							<p className="text-sm font-mono">
-								Encargo = (Valor Moeda Nacional × Prazo em dias) ÷ (CDI diária)
+								Encargo = Valor × (CDI mensal ÷ 30 ÷ 100) × Prazo em dias
 							</p>
 							<p className="text-xs text-gray-600 mt-1">
-								Onde: CDI Diária = CDI ao ano ÷ 360
+								CDI ao ano em percentual (ex: 12,65%) — base 360 dias corridos
 							</p>
 						</div>
 
 						<Button
 							onClick={handleCalculate}
-							className="w-full mb-4"
+							className="w-full mb-4 bg-blue-600 hover:bg-blue-700 text-white"
 							size="lg"
 							disabled={!formState.cdiAoAno || formState.prazoEmDias <= 0}
 						>
@@ -612,22 +629,51 @@ export default function ProcessCalculatorPage() {
 						</Button>
 
 						{formState.encargosCalculados > 0 && (
-							<div className="bg-green-50 p-4 rounded-lg">
-								<p className="text-sm font-semibold mb-1">Encargos Calculados:</p>
-								<p className="text-2xl font-bold text-green-700">
-									{new Intl.NumberFormat('pt-BR', {
-										style: 'currency',
-										currency: 'BRL'
-									}).format(formState.encargosCalculados)}
-								</p>
-								<div className="mt-2 text-sm text-gray-600">
-									<p>CDI Diária: {formState.cdiAoAno ? (formState.cdiAoAno / 360).toFixed(6) : '0'}%</p>
-									<p>Prazo: {formState.prazoEmDias} dias</p>
-									<p>Base: {new Intl.NumberFormat('pt-BR', {
-										style: 'currency',
-										currency: 'BRL'
-									}).format(formState.valorMoedaNacional)}</p>
+							<div className="space-y-3">
+								<div className="bg-green-50 p-4 rounded-lg">
+									<p className="text-sm font-semibold mb-1">Encargos Calculados (CDI):</p>
+									<p className="text-2xl font-bold text-green-700">
+										{new Intl.NumberFormat('pt-BR', {
+											style: 'currency',
+											currency: 'BRL'
+										}).format(formState.encargosCalculados)}
+									</p>
+									<div className="mt-2 text-sm text-gray-600">
+										<p>CDI Diária (base 30d): {formState.cdiMensal ? (formState.cdiMensal / 30).toFixed(6) : formState.cdiAoAno ? (formState.cdiAoAno / 360).toFixed(6) : '0'}%</p>
+										<p>Prazo: {formState.prazoEmDias} dias</p>
+										<p>Base: {new Intl.NumberFormat('pt-BR', {
+											style: 'currency',
+											currency: 'BRL'
+										}).format(formState.valorMoedaNacional)}</p>
+									</div>
 								</div>
+
+								{formState.variacaoCambial !== undefined && (
+									<div className={`p-4 rounded-lg ${formState.variacaoCambial > 0 ? 'bg-red-50' : formState.variacaoCambial < 0 ? 'bg-green-50' : 'bg-gray-50'}`}>
+										<p className="text-sm font-semibold mb-1">
+											Variação Cambial{' '}
+											{formState.variacaoCambial > 0
+												? '(Perda Cambial)'
+												: formState.variacaoCambial < 0
+													? '(Ganho Cambial)'
+													: '(Sem Variação)'}
+											:
+										</p>
+										<p className={`text-xl font-bold ${formState.variacaoCambial > 0 ? 'text-red-700' : formState.variacaoCambial < 0 ? 'text-green-700' : 'text-gray-600'}`}>
+											{new Intl.NumberFormat('pt-BR', {
+												style: 'currency',
+												currency: 'BRL'
+											}).format(formState.variacaoCambial)}
+										</p>
+										<div className="mt-2 text-xs text-gray-500">
+											<p>
+												{new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(formState.valorMoedaNegociada)}{" "}
+												× ({formState.taxaPtaxDI?.toFixed(4)} − {formState.taxaFechamento?.toFixed(4)})
+											</p>
+											<p className="mt-1 italic">Exibido separadamente — não compõe o total de encargos CDI</p>
+										</div>
+									</div>
+								)}
 							</div>
 						)}
 					</CardContent>
@@ -638,7 +684,7 @@ export default function ProcessCalculatorPage() {
 					<Button
 						onClick={handleSubmit}
 						disabled={formState.encargosCalculados <= 0 || submitting}
-						className="flex-1"
+						className="flex-1 bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-300"
 						size="lg"
 					>
 						{submitting ? <Spinner className="w-4 h-4 mr-2" /> : null}
