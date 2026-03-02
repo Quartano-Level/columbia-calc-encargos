@@ -37,7 +37,28 @@ router.get('/all', async (_req, res) => {
   }
 });
 
-// GET /processes/for-export - legado (mantido para compatibilidade, usa lógica antiga)
+// GET /processes/for-export-v2 - Fluxo V2 baseado em NFs (com297 → com311 → com017)
+router.get('/for-export-v2', async (req, res) => {
+  try {
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : 2;
+
+    if (isNaN(filCod) || filCod < 1 || filCod > 7) {
+      return res.status(400).json({ error: 'filCod inválido. Deve ser entre 1 e 7.' });
+    }
+
+    console.log(`[processes/for-export-v2] ✓ Rota executada (filCod=${filCod})`);
+    const result = await conexosService.getProcessesForExportV2(filCod);
+    res.json({ source: 'conexos', data: result });
+  } catch (err: any) {
+    console.error('[processes/for-export-v2] Error:', err.message);
+    res.status(502).json({
+      error: 'Erro ao buscar processos para exportação V2',
+      details: err.message,
+    });
+  }
+});
+
+/** @deprecated Use /for-export-v2 — mantido para compatibilidade */
 router.get('/for-export', async (req, res) => {
   try {
     const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : 2;

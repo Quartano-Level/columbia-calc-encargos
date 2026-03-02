@@ -1,5 +1,6 @@
 import axios, { AxiosInstance } from 'axios';
 import { boxLog, DEBUG_VERBOSE } from '../utils/index.js';
+import { config } from '../config.js';
 
 class ConexosService {
   private sid: string | null = null;
@@ -9,7 +10,7 @@ class ConexosService {
   constructor() {
     this.client = axios.create({
       baseURL: process.env.CONEXOS_BASE_URL || 'https://columbiatrading.conexos.cloud/api',
-      timeout: 20000,
+      timeout: 40000,
     });
   }
 
@@ -134,34 +135,58 @@ class ConexosService {
     console.log(`${separator}\n`);
   }
 
-  async getContracts(filCod: number = 2) {
+  async getContracts(filCod: number = config.conexos.filCod, pageSize = 100) {
     await this.ensureSid();
-    const body = {
-      fieldList: [],
-      filterList: { "vldStatus#IN": ["1"] },
-      pageNumber: 1,
-      pageSize: 100,
-      serviceName: "imp059",
-      orderList: { orderList: [{ propertyName: "imcCod", order: "desc" }] }
-    };
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
       'cnx-filcod': String(filCod),
-      'cnx-usncod': '97',
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
     const url = '/imp059/list';
+    const getHeaders = () => ({ ...headers, ...this.getAuthHeaders() });
+    const doRequest = async (pageNumber: number) => {
+      const body = {
+        fieldList: [],
+        filterList: { "vldStatus#IN": ["1"] },
+        pageNumber,
+        pageSize,
+        serviceName: "imp059",
+        orderList: { orderList: [{ propertyName: "imcCod", order: "desc" }] }
+      };
+      const resp = await this.client.post(url, body, { headers: getHeaders() });
+      return resp.data;
+    };
     try {
-      const resp = await this.client.post(url, body, { headers });
-      return resp.data?.rows || [];
+      let allRows: any[] = [];
+      let pageNumber = 1;
+      let hasMorePages = true;
+      while (hasMorePages) {
+        const data = await doRequest(pageNumber);
+        const rows = data?.rows || [];
+        const count = data?.count ?? 0;
+        allRows = allRows.concat(rows);
+        hasMorePages = count > pageSize && allRows.length < count;
+        pageNumber++;
+      }
+      return allRows;
     } catch (err: any) {
-      // this.logRequest('getContracts', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
       if (err.response && err.response.status === 401) {
         await this.login();
-        const retryResp = await this.client.post(url, body, { headers });
-        return retryResp.data?.rows || [];
+        let allRows: any[] = [];
+        let pageNumber = 1;
+        let hasMorePages = true;
+        while (hasMorePages) {
+          const data = await doRequest(pageNumber);
+          const rows = data?.rows || [];
+          const count = data?.count ?? 0;
+          allRows = allRows.concat(rows);
+          hasMorePages = count > pageSize && allRows.length < count;
+          pageNumber++;
+        }
+        return allRows;
       }
       throw err;
     }
@@ -185,8 +210,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -206,13 +231,12 @@ class ConexosService {
     }
   }
 
-  async getProcesses(filters?: { priCod?: string; priCodIn?: number[]; priEspRefcliente?: string }) {
+  async getProcesses(filters?: { priCod?: string; priCodIn?: number[]; priEspRefcliente?: string }, filCod: number = config.conexos.filCod) {
     boxLog('Conexos: getProcesses Input', filters);
     await this.ensureSid();
     const filterList: Record<string, any> = { "priVldStatus#IN": ["1"] };
 
     if (filters?.priCodIn && filters.priCodIn.length > 0) {
-      // Usar operador #IN para filtrar múltiplos processos
       filterList["priCod#IN"] = filters.priCodIn;
     } else if (filters?.priCod) {
       filterList["priCod#EQ"] = Number(filters.priCod);
@@ -232,8 +256,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -266,13 +290,13 @@ class ConexosService {
   }
 
   /** Retorna TODOS os processos (sem filtro de contratos) com paginação automática */
-  async getAllProcesses(pageSize = 500, filCod: number = 2) {
+  async getAllProcesses(pageSize = 500, filCod: number = config.conexos.filCod) {
     await this.ensureSid();
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
       'cnx-filcod': String(filCod),
-      'cnx-usncod': '97',
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -317,8 +341,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -470,8 +494,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -527,8 +551,8 @@ class ConexosService {
     const getHeaders = () => ({
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     });
@@ -591,8 +615,8 @@ class ConexosService {
     const getHeaders = () => ({
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     });
@@ -618,7 +642,7 @@ class ConexosService {
    * 3. Busca processos filtrando por priCod#IN
    * 4. Retorna processos enriquecidos com dados do contrato
    */
-  async getProcessesByContractId(imcCod: number) {
+  async getProcessesByContractId(imcCod: number, filCod: number = config.conexos.filCod) {
     if (!imcCod) return [];
 
     // Ensure session
@@ -635,18 +659,20 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
 
     const url = `/imp059/processos/list/${imcCod}`;
     try {
-      // this.logRequest('getProcessesByContractId', 'POST', url, body);
       const resp = await this.client.post(url, body, { headers });
-      // this.logRequest('getProcessesByContractId', 'POST', url, body, { status: resp.status, data: resp.data });
-      return resp.data?.rows || [];
+      const rows = resp.data?.rows || [];
+      if (rows.length > 0) {
+        console.log(`[getProcessesByContractId] imcCod=${imcCod} cnx-filcod=${filCod} → ${rows.length} processos: ${JSON.stringify(rows.map((r: any) => ({ priCod: r.priCod, filCod: r.filCod })))}`);
+      }
+      return rows;
     } catch (err: any) {
       // this.logRequest('getProcessesByContractId', 'POST', url, body, undefined, { status: err.response?.status, message: err.message, data: err.response?.data });
       if (err.response && err.response.status === 401) {
@@ -913,7 +939,7 @@ class ConexosService {
    * - (B) Processos sem contrato mas com encargo financeiro
    * Exclui: processos com contrato mas sem docs nem encargos; processos sem contrato nem encargos.
    */
-  async getProcessesForExport(filCod: number = 2) {
+  async getProcessesForExport(filCod: number = config.conexos.filCod) {
     await this.ensureSid();
 
     console.log(`\n★★★ EXPORT PLANILHA (Filial ${filCod}) ★★★`);
@@ -939,7 +965,7 @@ class ConexosService {
 
         try {
           // Buscar processos relacionados via API Conexos (mesmo que a home faz)
-          const relatedProcs = await this.getProcessesByContractId(contract.imcCod);
+          const relatedProcs = await this.getProcessesByContractId(contract.imcCod, filCod);
 
           if (relatedProcs && relatedProcs.length > 0) {
             relatedProcs.forEach((rp: any) => {
@@ -1091,8 +1117,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -1128,8 +1154,8 @@ class ConexosService {
 
     const headers = {
       ...this.getAuthHeaders(),
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
     };
 
@@ -1150,7 +1176,7 @@ class ConexosService {
     }
   }
 
-  async getFinancialTitlesPsq015(priCod: number, filCod: number = 2) {
+  async getFinancialTitlesPsq015(priCod: number, filCod: number = config.conexos.filCod) {
     if (!priCod) return [];
     await this.ensureSid();
 
@@ -1182,7 +1208,7 @@ class ConexosService {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
       'cnx-filcod': String(filCod),
-      'cnx-usncod': '97',
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -1209,7 +1235,7 @@ class ConexosService {
     }
   }
 
-  async getTitleDischargesPsq015(title: any, filCod: number = 2) {
+  async getTitleDischargesPsq015(title: any, filCod: number = config.conexos.filCod) {
     if (!title || !title.filCod || !title.docCod || !title.titCod) return [];
 
     await this.ensureSid();
@@ -1234,7 +1260,7 @@ class ConexosService {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
       'cnx-filcod': String(effectiveFilCod),
-      'cnx-usncod': '97',
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -1277,7 +1303,7 @@ class ConexosService {
    * @param filCod Filial
    * @returns Set de docCods válidos; em caso de erro, retorna o set completo (fail-open)
    */
-  async getValidDocCodesFromCom297(docCods: number[], filCod: number = 2): Promise<Set<number>> {
+  async getValidDocCodesFromCom297(docCods: number[], filCod: number = config.conexos.filCod): Promise<Set<number>> {
     if (!docCods || docCods.length === 0) return new Set();
 
     await this.ensureSid();
@@ -1298,7 +1324,7 @@ class ConexosService {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
       'cnx-filcod': String(filCod),
-      'cnx-usncod': '97',
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
@@ -1337,8 +1363,8 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
     };
 
@@ -1463,6 +1489,529 @@ class ConexosService {
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // V2: Fluxo baseado em Notas Fiscais (com297 → com311 → com017)
+  // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Lista notas fiscais de saída (com297) vinculadas a um processo.
+   * Opcionalmente filtra por cliente (pesCod).
+   */
+  async listInvoicesByProcess(priCod: number, pesCod?: number, filCod: number = config.conexos.filCod) {
+    if (!priCod) return [];
+    await this.ensureSid();
+
+    const filterList: Record<string, any> = {
+      "priCod#EQ": priCod,
+      "vldStatus#IN": ["1", "2", "3", "7"],
+    };
+    if (pesCod) {
+      filterList["pesCod#EQ"] = pesCod;
+    }
+
+    const body = {
+      fieldList: [
+        "docCod", "priCod", "priEspRefcliente", "docDtaEmissao", "docEspNumero",
+        "docVldTipoAdto", "tpdDesNome", "pesCod", "dpeNomPessoa", "ufEspSigla",
+        "mnyBruto", "docMnyValor", "vldStatus", "filCod", "docTip"
+      ],
+      filterList,
+      pageNumber: 1,
+      pageSize: 200,
+      serviceName: "com297",
+      orderList: { orderList: [{ propertyName: "docCod", order: "desc" }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/com297/list';
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || [];
+      if (DEBUG_VERBOSE) console.log(`[com297] priCod=${priCod}: ${rows.length} NFs encontradas`);
+      return rows;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || [];
+      }
+      console.error(`[com297] Erro ao listar NFs para priCod ${priCod}:`, err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Busca títulos financeiros de uma nota fiscal (com311).
+   * Retorna rows + summary (totalVlr, totalVlrPago).
+   */
+  async getTitlesByInvoice(docCod: number, filCod: number = config.conexos.filCod) {
+    if (!docCod) return { rows: [], summary: { totalVlr: 0, totalVlrPago: 0 } };
+    await this.ensureSid();
+
+    const body = {
+      fieldList: [
+        "titCod", "dupEspOrdem", "titEspNumero", "titDtaVencOriginal",
+        "titDtaVencimento", "titMnyValor", "pago", "titDtaPrevisao",
+        "titMnyTotPago", "titVldStatus", "filCod", "docTip", "docCod",
+        "tciCod", "titFltTaxaMneg", "titMnyValorMneg", "moeCodMneg",
+        "moeEspNome", "gerNumJuros", "gerDesJuros", "gerNumDesconto",
+        "gerDesDesconto", "vldBordero"
+      ],
+      filterList: { "titVldStatus#EQ": "1" },
+      pageNumber: 1,
+      pageSize: 100,
+      serviceName: "com311.finTituloFin",
+      orderList: { orderList: [{ propertyName: "titCod", order: "asc" }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = `/com311/list/${docCod}`;
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      return {
+        rows: resp.data?.rows || [],
+        summary: resp.data?.summary || { totalVlr: 0, totalVlrPago: 0 },
+      };
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return {
+          rows: retryResp.data?.rows || [],
+          summary: retryResp.data?.summary || { totalVlr: 0, totalVlrPago: 0 },
+        };
+      }
+      console.error(`[com311] Erro ao buscar títulos para docCod ${docCod}:`, err.message);
+      return { rows: [], summary: { totalVlr: 0, totalVlrPago: 0 } };
+    }
+  }
+
+  /**
+   * Busca encargos gerais de uma nota fiscal (com017).
+   * Retorna impostos, despesas, encargosGerais, resumo, totalProdutos.
+   */
+  async getEncargosGeraisByInvoice(docTip: number, docCod: number, filCod: number = config.conexos.filCod) {
+    if (!docCod) return null;
+    await this.ensureSid();
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = `/com017/encargosGerais/${docTip}/${docCod}/${filCod}/1/1`;
+    try {
+      const resp = await this.client.get(url, { headers });
+      if (DEBUG_VERBOSE) console.log(`[com017] encargosGerais docCod=${docCod}: despesas=${resp.data?.despesas?.length || 0}`);
+      return resp.data;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.get(url, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data;
+      }
+      console.error(`[com017] Erro ao buscar encargos para docCod ${docCod}:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * V2: Exportação baseada em NFs.
+   * Fluxo: contratos (imp059) → processos → NFs (com297) → títulos (com311) + encargos (com017)
+   *
+   * Retorna dados estruturados hierarquicamente:
+   *   processo → contratos → notas fiscais → { títulos, encargos }
+   */
+  async getProcessesForExportV2(filCod: number = config.conexos.filCod) {
+    await this.ensureSid();
+
+    console.log(`\n★★★ EXPORT V2 (NFs) — Filial ${filCod} ★★★`);
+
+    // 1. Buscar contratos e vincular a processos (mesma lógica da V1)
+    console.log('[ExportV2] 1/4 Buscando contratos de câmbio...');
+    const allContracts = await this.getContracts(filCod);
+    console.log(`[ExportV2] Contratos encontrados: ${allContracts.length}`);
+
+    const contractsByProcess = new Map<number, any[]>();
+    const allPriCods = new Set<number>();
+    const concurrency = 20;
+
+    for (let i = 0; i < allContracts.length; i += concurrency) {
+      const batch = allContracts.slice(i, i + concurrency);
+      await Promise.all(batch.map(async (contract: any) => {
+        if (!contract.imcCod) return;
+        try {
+          const relatedProcs = await this.getProcessesByContractId(contract.imcCod, filCod);
+          if (relatedProcs?.length > 0) {
+            relatedProcs.forEach((rp: any) => {
+              if (rp.priCod) {
+                const priCod = Number(rp.priCod);
+                allPriCods.add(priCod);
+                if (!contractsByProcess.has(priCod)) contractsByProcess.set(priCod, []);
+                contractsByProcess.get(priCod)!.push(contract);
+              }
+            });
+          }
+        } catch (_) { /* ignora erros individuais */ }
+      }));
+      console.log(`[ExportV2]   Vinculados ${Math.min(i + concurrency, allContracts.length)}/${allContracts.length} contratos`);
+    }
+
+    const distinctPriCods = Array.from(allPriCods);
+    console.log(`[ExportV2] Processos com contratos: ${distinctPriCods.length}`);
+    console.log(`[ExportV2] priCods encontrados (filial ${filCod}): [${distinctPriCods.join(', ')}]`);
+
+    if (distinctPriCods.length === 0) {
+      console.log('★★★ FIM EXPORT V2 (sem processos) ★★★\n');
+      return { processes: [] };
+    }
+
+    // 2. Buscar dados dos processos (imp021)
+    console.log('[ExportV2] 2/4 Buscando dados dos processos (imp021)...');
+    const processes = await this.getProcesses({ priCodIn: distinctPriCods }, filCod);
+    console.log(`[ExportV2] Processos recuperados: ${processes.length}`);
+    if (processes.length > 0) {
+      console.log(`[ExportV2] filCods nos dados retornados: [${[...new Set(processes.map((p: any) => p.filCod))].join(', ')}]`);
+    }
+
+    // 3. Para cada processo, buscar NFs (com297)
+    console.log('[ExportV2] 3/4 Buscando NFs para cada processo (com297)...');
+    const processResults: any[] = [];
+
+    for (let i = 0; i < processes.length; i += concurrency) {
+      const batch = processes.slice(i, i + concurrency);
+      const batchResults = await Promise.all(batch.map(async (proc: any) => {
+        const priCod = Number(proc.priCod);
+        const contracts = contractsByProcess.get(priCod) || [];
+        const invoices = await this.listInvoicesByProcess(priCod, undefined, filCod);
+
+        return {
+          ...proc,
+          contracts,
+          invoices,
+        };
+      }));
+      processResults.push(...batchResults);
+      console.log(`[ExportV2]   NFs buscadas para ${Math.min(i + concurrency, processes.length)}/${processes.length} processos`);
+    }
+
+    // 4. Para cada NF, buscar títulos (com311) + encargos (com017) em paralelo
+    console.log('[ExportV2] 4/4 Enriquecendo NFs com títulos (com311) e encargos (com017)...');
+    let totalInvoices = 0;
+    let enrichedCount = 0;
+
+    for (const proc of processResults) {
+      totalInvoices += (proc.invoices || []).length;
+    }
+
+    for (const proc of processResults) {
+      const enrichedInvoices: any[] = [];
+
+      for (let i = 0; i < (proc.invoices || []).length; i += concurrency) {
+        const batch = proc.invoices.slice(i, i + concurrency);
+        const enriched = await Promise.all(batch.map(async (inv: any) => {
+          const docCod = Number(inv.docCod);
+          const docTip = inv.docTip ?? 1;
+          const invFilCod = inv.filCod ?? filCod;
+
+          const [titlesData, encargos] = await Promise.all([
+            this.getTitlesByInvoice(docCod, invFilCod),
+            this.getEncargosGeraisByInvoice(docTip, docCod, invFilCod),
+          ]);
+
+          // Buscar data de baixa (borDtaMvto) via psq015/baixasTitulo para títulos pagos
+          const titlesWithDischargeDate = await Promise.all(
+            (titlesData.rows || []).map(async (title: any) => {
+              if (title.pago !== 1 && title.pago !== 2) return title;
+              try {
+                const discharges = await this.getTitleDischargesPsq015(title, invFilCod);
+                if (discharges && discharges.length > 0) {
+                  discharges.sort((a: any, b: any) => {
+                    const dA = new Date(a.borDtaMvto || 0).getTime();
+                    const dB = new Date(b.borDtaMvto || 0).getTime();
+                    return dB - dA;
+                  });
+                  return { ...title, borDtaMvto: discharges[0].borDtaMvto };
+                }
+              } catch (_) { /* ignora erros individuais */ }
+              return title;
+            })
+          );
+
+          enrichedCount++;
+
+          return {
+            ...inv,
+            titles: titlesWithDischargeDate,
+            titlesSummary: titlesData.summary,
+            encargos,
+          };
+        }));
+        enrichedInvoices.push(...enriched);
+      }
+
+      proc.invoices = enrichedInvoices;
+    }
+
+    console.log(`[ExportV2] NFs enriquecidas: ${enrichedCount}/${totalInvoices}`);
+    console.log(`[ExportV2] ✓ Total: ${processResults.length} processos, ${totalInvoices} NFs`);
+    console.log('★★★ FIM EXPORT V2 ★★★\n');
+
+    return { processes: processResults };
+  }
+
+  /**
+   * Busca o total de "Valor a Permutar" (mnyTitPermutar) da com299 para a INOX Tech (pesCod=191).
+   * Estratégia: list retorna apenas docCod; para cada docCod, GET /com299/{docCod} e soma rows[0].mnyTitPermutar.
+   */
+  async getValorPermutar(): Promise<number> {
+    await this.ensureSid();
+
+    const baseURL = this.client.defaults.baseURL || 'https://columbiatrading.conexos.cloud/api';
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    console.log('[com299] ─── ETAPA 1: list (apenas docCod) ───');
+
+    const docCods: number[] = [];
+    let page = 1;
+    const pageSize = 100;
+
+    while (true) {
+      const listBody = {
+        fieldList: ['docCod'],
+        filterList: {
+          'docVldTipoAdto#EQ': '1',
+          'pesCod#EQ': 191,
+          'vldStatus#IN': ['1', '3'],
+        },
+        pageNumber: page,
+        pageSize,
+        serviceName: 'com299',
+        orderList: { orderList: [{ propertyName: 'docCod', order: 'desc' }] },
+      };
+
+      console.log(`[com299] List pág ${page}:`, JSON.stringify(listBody, null, 2));
+
+      let rows: any[] = [];
+      let count = 0;
+      try {
+        const resp = await this.client.post('/com299/list', listBody, { headers });
+        rows = resp.data?.rows || resp.data?.data?.rows || [];
+        count = resp.data?.count ?? resp.data?.data?.count ?? rows.length;
+        console.log(`[com299] List pág ${page}: count=${count}, rows=${rows.length}`);
+      } catch (err: any) {
+        if (err.response?.status === 401) {
+          await this.login();
+          const retryResp = await this.client.post('/com299/list', listBody, { headers: { ...headers, ...this.getAuthHeaders() } });
+          rows = retryResp.data?.rows || retryResp.data?.data?.rows || [];
+          count = retryResp.data?.count ?? retryResp.data?.data?.count ?? rows.length;
+        } else {
+          console.error('[com299] Erro no list:', err.message, 'Status:', err.response?.status, 'Data:', JSON.stringify(err.response?.data || {}));
+          throw err;
+        }
+      }
+
+      for (const row of rows) {
+        const cod = row.docCod ?? row.doccod;
+        if (cod != null) docCods.push(Number(cod));
+      }
+
+      if (rows.length < pageSize || page * pageSize >= count) break;
+      page++;
+    }
+
+    console.log(`[com299] docCods coletados: ${docCods.length}`, docCods.slice(0, 5).join(', ') + (docCods.length > 5 ? '...' : ''));
+
+    if (docCods.length === 0) {
+      console.log('[com299] ─── RESULTADO valor-permutar ─── total: 0 (nenhum docCod)');
+      return 0;
+    }
+
+    console.log('[com299] ─── ETAPA 2: GET /com299/{docCod} para cada registro ───');
+
+    let total = 0;
+    for (let i = 0; i < docCods.length; i++) {
+      const docCod = docCods[i];
+      try {
+        const getResp = await this.client.get(`/com299/${docCod}`, { headers });
+        const getRows = getResp.data?.rows ?? getResp.data?.data?.rows;
+        const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : getResp.data;
+        const valor = Number(row0?.mnyTitPermutar ?? 0);
+        total += valor;
+        if (DEBUG_VERBOSE || (i < 3)) {
+          console.log(`[com299] GET /com299/${docCod}: mnyTitPermutar=${valor}`);
+        }
+      } catch (err: any) {
+        if (err.response?.status === 401) {
+          await this.login();
+          const retryResp = await this.client.get(`/com299/${docCod}`, { headers: { ...headers, ...this.getAuthHeaders() } });
+          const getRows = retryResp.data?.rows ?? retryResp.data?.data?.rows;
+          const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : retryResp.data;
+          total += Number(row0?.mnyTitPermutar ?? 0);
+        } else {
+          console.error(`[com299] Erro GET /com299/${docCod}:`, err.message, 'Status:', err.response?.status);
+          // continua para próximo docCod em vez de falhar tudo
+        }
+      }
+    }
+
+    console.log('[com299] ─── RESULTADO valor-permutar ─── total:', total);
+    return total;
+  }
+
+  /**
+   * Lista todos os registros com299 da INOX Tech (pesCod=191) com colunas financeiras.
+   * Retorna array de { docCod, mnyBruto, mnyAcrescimo, mnyDesconto, mnyTitValor, mnyTitPago, mnyTitPermuta, mnyTitAberto, mnyTitPermutar }.
+   */
+  async getCom299List(): Promise<Array<{
+    docCod: number;
+    mnyBruto: number;
+    mnyAcrescimo: number;
+    mnyDesconto: number;
+    mnyTitValor: number;
+    mnyTitPago: number;
+    mnyTitPermuta: number;
+    mnyTitAberto: number;
+    mnyTitPermutar: number;
+  }>> {
+    await this.ensureSid();
+
+    const baseURL = this.client.defaults.baseURL || 'https://columbiatrading.conexos.cloud/api';
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const docCods: number[] = [];
+    let page = 1;
+    const pageSize = 100;
+
+    while (true) {
+      const listBody = {
+        fieldList: ['docCod'],
+        filterList: {
+          'docVldTipoAdto#EQ': '1',
+          'pesCod#EQ': 191,
+          'vldStatus#IN': ['1', '3'],
+        },
+        pageNumber: page,
+        pageSize,
+        serviceName: 'com299',
+        orderList: { orderList: [{ propertyName: 'docCod', order: 'desc' }] },
+      };
+
+      let rows: any[] = [];
+      let count = 0;
+      try {
+        const resp = await this.client.post('/com299/list', listBody, { headers });
+        rows = resp.data?.rows || resp.data?.data?.rows || [];
+        count = resp.data?.count ?? resp.data?.data?.count ?? rows.length;
+      } catch (err: any) {
+        if (err.response?.status === 401) {
+          await this.login();
+          const retryResp = await this.client.post('/com299/list', listBody, { headers: { ...headers, ...this.getAuthHeaders() } });
+          rows = retryResp.data?.rows || retryResp.data?.data?.rows || [];
+          count = retryResp.data?.count ?? retryResp.data?.data?.count ?? rows.length;
+        } else {
+          throw err;
+        }
+      }
+
+      for (const row of rows) {
+        const cod = row.docCod ?? row.doccod;
+        if (cod != null) docCods.push(Number(cod));
+      }
+
+      if (rows.length < pageSize || page * pageSize >= count) break;
+      page++;
+    }
+
+    const result: Array<{
+      docCod: number;
+      mnyBruto: number;
+      mnyAcrescimo: number;
+      mnyDesconto: number;
+      mnyTitValor: number;
+      mnyTitPago: number;
+      mnyTitPermuta: number;
+      mnyTitAberto: number;
+      mnyTitPermutar: number;
+    }> = [];
+
+    for (const docCod of docCods) {
+      try {
+        const getResp = await this.client.get(`/com299/${docCod}`, { headers });
+        const getRows = getResp.data?.rows ?? getResp.data?.data?.rows;
+        const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : getResp.data;
+        if (!row0) continue;
+
+        result.push({
+          docCod,
+          mnyBruto: Number(row0.mnyBruto ?? 0),
+          mnyAcrescimo: Number(row0.mnyAcrescimo ?? 0),
+          mnyDesconto: Number(row0.mnyDesconto ?? 0),
+          mnyTitValor: Number(row0.mnyTitValor ?? 0),
+          mnyTitPago: Number(row0.mnyTitPago ?? 0),
+          mnyTitPermuta: Number(row0.mnyTitPermuta ?? 0),
+          mnyTitAberto: Number(row0.mnyTitAberto ?? 0),
+          mnyTitPermutar: Number(row0.mnyTitPermutar ?? 0),
+        });
+      } catch (err: any) {
+        if (err.response?.status === 401) {
+          await this.login();
+          const retryResp = await this.client.get(`/com299/${docCod}`, { headers: { ...headers, ...this.getAuthHeaders() } });
+          const getRows = retryResp.data?.rows ?? retryResp.data?.data?.rows;
+          const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : retryResp.data;
+          if (row0) {
+            result.push({
+              docCod,
+              mnyBruto: Number(row0.mnyBruto ?? 0),
+              mnyAcrescimo: Number(row0.mnyAcrescimo ?? 0),
+              mnyDesconto: Number(row0.mnyDesconto ?? 0),
+              mnyTitValor: Number(row0.mnyTitValor ?? 0),
+              mnyTitPago: Number(row0.mnyTitPago ?? 0),
+              mnyTitPermuta: Number(row0.mnyTitPermuta ?? 0),
+              mnyTitAberto: Number(row0.mnyTitAberto ?? 0),
+              mnyTitPermutar: Number(row0.mnyTitPermutar ?? 0),
+            });
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
   async submitExpense(data: {
     processId: string | number;
     emissionDate: string;
@@ -1488,7 +2037,7 @@ class ConexosService {
       prjCod: 1,
       idtCod: 1,
       pidVldStatus: 1,
-      impCod: 1081,
+      impCod: config.conexos.impCod,
       pidVldFormaReteio: 2,
       pidDtaTaxas: timestamp,
       pdiVldOrigemDesp: 1,
@@ -1500,19 +2049,19 @@ class ConexosService {
       moeEspNome: "REAL/BRASIL",
       pidFltTxMneg: 1,
       ctpDesNome: "ENCARGOS FINANCEIROS",
-      ctpCod: 672,
+      ctpCod: config.conexos.ctpCod,
       prdDesNome: null,
       prdCod: null,
       pidMnyValormn: Number(valorBRL.toFixed(2)),
       pidMnyValorMneg: Number(valorBRL.toFixed(2)),
-      filCod: "2"
+      filCod: String(config.conexos.filCod)
     };
 
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': '2',
-      'cnx-usncod': '97',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
     };
