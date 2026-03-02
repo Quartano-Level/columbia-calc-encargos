@@ -39,6 +39,7 @@ export interface CalculationInput {
 	taxaCDI: number;
 	taxaConexos: number;
 	taxaCalculada?: number;
+	taxaPtaxDI?: number; // Para cálculo de variação cambial no backend
 }
 
 export interface CalculationResult {
@@ -160,5 +161,7 @@ export interface CalculatorFormState {
 
 	// Calculation
 	cdiAoAno: number | null;
+	cdiMensal?: number | null;
 	encargosCalculados: number;
+	variacaoCambial?: number;
 }
