@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getCalculationById, getCalculationsList } from '../services/supabase.js';
+import { getCalculationById, getCalculationsList, getCalculationsSummary } from '../services/supabase.js';
 import { logEvent, boxLog } from '../utils/index.js';
 
 const router = Router();
@@ -15,6 +15,17 @@ router.post('/', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(422).json({ error: 'Erro ao calcular', details: err.message });
+  }
+});
+
+// GET /calculations/summary?months=6
+router.get('/summary', async (req, res) => {
+  try {
+    const months = Math.min(Number(req.query.months) || 6, 24);
+    const data = await getCalculationsSummary(months);
+    res.json({ data });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Erro ao buscar resumo mensal', details: err.message });
   }
 });
 

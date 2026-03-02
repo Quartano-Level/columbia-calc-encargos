@@ -32,6 +32,7 @@ export interface CalculationInput {
 	taxaCDI: number; // Taxa CDI anual (%)
 	taxaConexos: number; // Taxa do Conexos (%)
 	taxaCalculada?: number; // Taxa calculada (opcional)
+	taxaPtaxDI?: number; // Taxa Ptax na data da D.I. — para cálculo de variação cambial
 }
 
 export interface CalculationResult {

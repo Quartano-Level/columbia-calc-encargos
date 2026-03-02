@@ -59,3 +59,37 @@ export async function getCalculationsList({ limit = 100, processId }: { limit?: 
   if (processId) query = query.eq('processo_id', processId);
   return query;
 }
+
+export type MonthlySummary = {
+  month: string;       // "YYYY-MM"
+  totalEncargos: number;
+  count: number;
+  submitted: number;
+};
+
+export async function getCalculationsSummary(months = 6): Promise<MonthlySummary[]> {
+  const from = new Date();
+  from.setMonth(from.getMonth() - months);
+  from.setDate(1);
+  from.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('calculations')
+    .select('total_encargos, calculated_at, status')
+    .gte('calculated_at', from.toISOString())
+    .order('calculated_at', { ascending: true });
+
+  if (error) throw new Error(`DB error: ${error.message}`);
+
+  const byMonth: Record<string, MonthlySummary> = {};
+  for (const row of (data || [])) {
+    const month = (row.calculated_at as string | null)?.substring(0, 7) ?? '';
+    if (!month) continue;
+    if (!byMonth[month]) byMonth[month] = { month, totalEncargos: 0, count: 0, submitted: 0 };
+    byMonth[month].totalEncargos += Number(row.total_encargos || 0);
+    byMonth[month].count += 1;
+    if (row.status === 'submitted') byMonth[month].submitted += 1;
+  }
+
+  return Object.values(byMonth).sort((a, b) => a.month.localeCompare(b.month));
+}

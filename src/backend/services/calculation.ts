@@ -2,6 +2,8 @@ import { CalculationResult, CalculationInput, Payment } from '../types/index.js'
 import { CalculationResultSchema } from '../types/schemas.js';
 import { conexosService } from './conexos.js';
 import { cdiCalculatorService } from './cdi-calculator.js';
+import { calcEncargosSimples } from './encargos-calculator.js';
+import { config } from '../config.js';
 import { saveCalculation, getCalculationById } from './supabase.js';
 import { calculationInputHash, logEvent, boxLog } from '../utils/index.js';
 
@@ -48,8 +50,9 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     const valorUSD = Number(p.pipMnyValor || p.valorUSD || p.value || 0) || 0;
     const dias = Number(p.pipNumDiasVcto || p.diasCorridos || p.days || 0) || 0;
 
-    // Fórmula: Juros = Valor * (CDI / 100) * Dias
-    const encargos = valorUSD * (cdiDiario / 100) * (dias || 0);
+    // Fórmula: Juros = Valor × (taxaAnual / base / 100) × Dias
+    // cdiDiario é a taxa diária em % do Conexos (ex: 0.0521) → anualizada = cdiDiario × base
+    const encargos = calcEncargosSimples(valorUSD, cdiDiario * config.calcBase, dias || 0, config.calcBase);
 
     return {
       data: toDateIso(p.pipDtaVcto || p.data || p.dtaVcto || p.paymentDate || p.dta),
@@ -119,6 +122,14 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
   const totalInterest = movimentos.reduce((acc: number, m: any) => acc + m.encargos, 0);
   const totalDisburse = movimentos.reduce((acc: number, m: any) => acc + m.valorUSD, 0);
 
+  // Variação Cambial = Valor USD × (Ptax DI - Taxa Fechamento)
+  // Positivo = perda cambial (dólar ficou mais caro); Negativo = ganho cambial
+  const taxaPtaxDI = Number(input.taxaPtaxDI) || Number((process as any)?.taxaPtaxDI) || 0;
+  const taxaFechamento = Number(process?.imcFltTxFec) || 0;
+  const variacaoCambial = (fobTotal > 0 && taxaPtaxDI > 0 && taxaFechamento > 0)
+    ? fobTotal * (taxaPtaxDI - taxaFechamento)
+    : 0;
+
   // Mapear despesas (considerando campos do Conexos vindos de imp021)
   const despesasMap = Array.isArray(despesas)
     ? despesas.map((d: any) => ({
@@ -153,6 +164,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     creditos: {},
     despesas: despesasMap,
     encargos: {
+      variacaoCambial,
       total: totalInterest,
     },
     custos: {
