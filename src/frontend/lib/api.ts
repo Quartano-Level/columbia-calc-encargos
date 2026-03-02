@@ -69,10 +69,27 @@ export interface ProcessesWithContractsResponse {
 	contracts: any[];
 	totalProcesses: number;
 	totalContracts: number;
+	pagination?: {
+		nextCursor: number | null;
+		hasMore: boolean;
+		totalContractsAvailable: number;
+	};
 }
 
-export async function fetchProcessesWithContracts(): Promise<ProcessesWithContractsResponse> {
-	const response = await fetch(`${API_BASE_URL}/processes/with-contracts`, {
+export async function fetchProcessesWithContracts(params?: {
+	cursor?: number;
+	dateFrom?: string;
+	dateTo?: string;
+}): Promise<ProcessesWithContractsResponse> {
+	const qs = new URLSearchParams();
+	if (params?.cursor) qs.append('cursor', String(params.cursor));
+	if (params?.dateFrom) qs.append('dateFrom', params.dateFrom);
+	if (params?.dateTo) qs.append('dateTo', params.dateTo);
+	const queryString = qs.toString();
+	const url = queryString
+		? `${API_BASE_URL}/processes/with-contracts?${queryString}`
+		: `${API_BASE_URL}/processes/with-contracts`;
+	const response = await fetch(url, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
 	});

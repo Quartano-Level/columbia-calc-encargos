@@ -82,9 +82,17 @@ router.get('/for-export', async (req, res) => {
 });
 
 // GET /processes/with-contracts - processos que possuem contratos de câmbio
-router.get('/with-contracts', async (_req, res) => {
+router.get('/with-contracts', async (req, res) => {
   try {
-    const result = await conexosService.getProcessesWithContractsEnriched();
+    const cursor = req.query.cursor ? parseInt(String(req.query.cursor), 10) : undefined;
+    const dateFrom = req.query.dateFrom ? String(req.query.dateFrom) : undefined;
+    const dateTo = req.query.dateTo ? String(req.query.dateTo) : undefined;
+
+    const result = await conexosService.getProcessesWithContractsEnriched({
+      cursor: cursor && !isNaN(cursor) ? cursor : undefined,
+      dateFrom,
+      dateTo,
+    });
     res.json({
       source: 'conexos',
       data: result,
@@ -101,8 +109,8 @@ router.get('/with-contracts', async (_req, res) => {
 // GET /contracts - contratos de câmbio
 router.get('/contracts', async (_req, res) => {
   try {
-    const contracts = await conexosService.getContracts();
-    res.json({ source: 'conexos', data: contracts });
+    const contractResult = await conexosService.getContracts();
+    res.json({ source: 'conexos', data: contractResult.rows });
   } catch (err: any) {
     res.status(502).json({ error: 'Erro ao buscar contratos do Conexos', details: err.message });
   }

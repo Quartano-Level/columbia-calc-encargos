@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { fetchProcessesWithContracts, fetchBCBLatestCDI, fetchCalculationsSummary, MonthlySummary } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AuthErrorAlert } from "@/components/auth-error-alert";
 import { ProtectedRoute } from "@/components/protected-route";
 import { KpiCard } from "@/components/kpi-card";
-import { Search, FileText, DollarSign, ChevronRight, AlertTriangle, TrendingDown, FileDown, BarChart2, ChevronDown, CheckCircle2 } from "lucide-react";
+import { Search, FileText, DollarSign, ChevronRight, AlertTriangle, TrendingDown, FileDown, BarChart2, ChevronDown, CheckCircle2, Calendar, X, Loader2 } from "lucide-react";
 import { fetchProcessesForExportV2, fetchBCBCDIHistory, fetchValorPermutar, fetchCom299List } from "@/lib/api";
 import { exportDelaysXLSXV2, exportDelaysV2PDF } from "@/lib/csv";
 import {
@@ -87,6 +87,13 @@ export default function Home() {
 	const [encargosSubmetidosTrend, setEncargosSubmetidosTrend] = useState<number | undefined>(undefined);
 	const [chartOpen, setChartOpen] = useState(false);
 
+	const [loadingMore, setLoadingMore] = useState(false);
+	const [nextCursor, setNextCursor] = useState<number | null>(null);
+	const [hasMore, setHasMore] = useState(false);
+	const [totalContractsAvailable, setTotalContractsAvailable] = useState(0);
+	const [dateFrom, setDateFrom] = useState<string>("");
+	const [dateTo, setDateTo] = useState<string>("");
+
 	const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 	const [exporting, setExporting] = useState(false);
 	const [exportStep, setExportStep] = useState<string>("");
@@ -111,6 +118,20 @@ export default function Home() {
 	useEffect(() => {
 		filterAndSortProcesses();
 	}, [processes, searchTerm, sortBy]);
+
+	// Reload when date filters change (both filled or both empty) — skip initial mount
+	const dateFilterMounted = useRef(false);
+	useEffect(() => {
+		if (!dateFilterMounted.current) {
+			dateFilterMounted.current = true;
+			return;
+		}
+		const bothFilled = dateFrom !== "" && dateTo !== "";
+		const bothEmpty = dateFrom === "" && dateTo === "";
+		if (bothFilled || bothEmpty) {
+			loadProcesses(true);
+		}
+	}, [dateFrom, dateTo]);
 
 	async function loadKpiExtras() {
 		setKpiLoading(true);
@@ -239,12 +260,25 @@ export default function Home() {
 		}
 	};
 
-	async function loadProcesses() {
+	async function loadProcesses(reset = true) {
 		try {
-			setLoading(true);
-			setError(null);
+			if (reset) {
+				setLoading(true);
+				setError(null);
+			} else {
+				setLoadingMore(true);
+			}
 
-			const response = await fetchProcessesWithContracts();
+			const response = await fetchProcessesWithContracts({
+				cursor: reset ? undefined : (nextCursor ?? undefined),
+				dateFrom: dateFrom || undefined,
+				dateTo: dateTo || undefined,
+			});
+
+			// Update pagination state
+			setNextCursor(response.pagination?.nextCursor ?? null);
+			setHasMore(response.pagination?.hasMore ?? false);
+			setTotalContractsAvailable(response.pagination?.totalContractsAvailable ?? 0);
 
 			// Calcular juros perdidos por atrasos a partir dos dados de pagamentos
 			const cdiDiario = 0.045; // fallback; idealmente viria do CDI carregado
@@ -273,9 +307,6 @@ export default function Home() {
 				});
 			});
 
-			setTotalLostInterestGlobal(totalLost);
-			setDelayedProcessesCount(delayedPriCods.size);
-
 			const mapped = response.processes.map((p) => ({
 				id: String(p.priCod || p.id),
 				processNumber: p.priEspRefcliente || p.processNumber || String(p.priCod || p.id),
@@ -289,13 +320,33 @@ export default function Home() {
 				hasDelay: false,
 				totalLostInterest: 0,
 			}));
-			setProcesses(mapped as any);
-			setExpandedRows(new Set());
-			setCalculatedProcessesCount(0);
+
+			if (reset) {
+				setProcesses(mapped as any);
+				setTotalLostInterestGlobal(totalLost);
+				setDelayedProcessesCount(delayedPriCods.size);
+				setExpandedRows(new Set());
+				setCalculatedProcessesCount(0);
+			} else {
+				// Merge with dedup by process id
+				setProcesses((prev) => {
+					const existingIds = new Set(prev.map((p) => p.id));
+					const newItems = (mapped as any[]).filter((p) => !existingIds.has(p.id));
+					return [...prev, ...newItems];
+				});
+				// Accumulate delay stats
+				setTotalLostInterestGlobal((prev) => prev + totalLost);
+				setDelayedProcessesCount((prev) => {
+					const combined = new Set<number>();
+					// We can't easily merge sets across state, so just add new count
+					return prev + delayedPriCods.size;
+				});
+			}
 		} catch (err) {
 			setError(err instanceof Error ? err.message : "Failed to load processes");
 		} finally {
 			setLoading(false);
+			setLoadingMore(false);
 		}
 	}
 
@@ -349,7 +400,7 @@ export default function Home() {
 				<Alert variant="destructive">
 					<AlertDescription>{error}</AlertDescription>
 				</Alert>
-				<Button onClick={loadProcesses} className="mt-4 bg-[#337ab7] hover:bg-blue-800">
+				<Button onClick={() => loadProcesses(true)} className="mt-4 bg-[#337ab7] hover:bg-blue-800">
 					Tentar novamente
 				</Button>
 			</div>
@@ -553,8 +604,8 @@ export default function Home() {
 
 				{/* Filtros */}
 				<div className="bg-white rounded-xl border border-gray-200 p-3 mb-4 shadow-sm">
-					<div className="flex items-center gap-3">
-						<div className="flex-1 relative">
+					<div className="flex items-center gap-3 flex-wrap">
+						<div className="flex-1 relative min-w-[200px]">
 							<Search className="absolute left-3 top-2 text-gray-400" size={16} />
 							<Input
 								placeholder="Buscar por número ou cliente..."
@@ -562,6 +613,32 @@ export default function Home() {
 								value={searchTerm}
 								onChange={(e) => setSearchTerm(e.target.value)}
 							/>
+						</div>
+						<div className="flex items-center gap-2">
+							<Calendar size={14} className="text-gray-400" />
+							<span className="text-gray-500 text-xs font-bold">De</span>
+							<input
+								type="date"
+								className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-gray-50 h-9 font-medium focus:outline-none focus:ring-2 focus:ring-[#337ab7]"
+								value={dateFrom}
+								onChange={(e) => setDateFrom(e.target.value)}
+							/>
+							<span className="text-gray-500 text-xs font-bold">Até</span>
+							<input
+								type="date"
+								className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-gray-50 h-9 font-medium focus:outline-none focus:ring-2 focus:ring-[#337ab7]"
+								value={dateTo}
+								onChange={(e) => setDateTo(e.target.value)}
+							/>
+							{(dateFrom || dateTo) && (
+								<button
+									onClick={() => { setDateFrom(""); setDateTo(""); }}
+									className="p-1 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 transition-colors"
+									title="Limpar filtro de data"
+								>
+									<X size={14} />
+								</button>
+							)}
 						</div>
 						<div className="flex items-center gap-2">
 							<span className="text-gray-500 text-xs font-bold uppercase tracking-tight">Ordenar:</span>
@@ -575,6 +652,11 @@ export default function Home() {
 							</select>
 						</div>
 					</div>
+					{totalContractsAvailable > 0 && (
+						<div className="mt-2 text-[10px] text-gray-400">
+							Exibindo {processes.length} processos de {totalContractsAvailable} contratos disponíveis
+						</div>
+					)}
 				</div>
 
 				{/* Tabela de Processos */}
@@ -708,8 +790,28 @@ export default function Home() {
 					</table>
 				</div>
 
+				{/* Carregar mais */}
+				{hasMore && !loading && (
+					<div className="flex justify-center py-4">
+						<Button
+							onClick={() => loadProcesses(false)}
+							disabled={loadingMore}
+							className="bg-[#337ab7] hover:bg-blue-700 text-white font-bold text-xs px-6 py-2 rounded-lg shadow-sm"
+						>
+							{loadingMore ? (
+								<>
+									<Loader2 size={14} className="animate-spin mr-2" />
+									Carregando...
+								</>
+							) : (
+								`Carregar mais (${filteredProcesses.length} de ${totalContractsAvailable} contratos exibidos)`
+							)}
+						</Button>
+					</div>
+				)}
+
 				{/* Empty State */}
-				{filteredProcesses.length === 0 && (
+				{filteredProcesses.length === 0 && !loading && (
 					<div className="bg-white rounded-xl border border-gray-200 p-8 text-center mt-4">
 						<p className="text-gray-500 text-sm">
 							{searchTerm ? "Nenhum processo encontrado com os filtros aplicados" : "Nenhum processo carregado"}

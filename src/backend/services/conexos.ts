@@ -6,11 +6,19 @@ class ConexosService {
   private sid: string | null = null;
   private sidExpiresAt: number | null = null;
   private client: AxiosInstance;
+  private loginPromise: Promise<void> | null = null;
 
   constructor() {
+    const headers: Record<string, string> = {};
+    const ambiente = process.env.CONEXOS_AMBIENTE;
+    if (ambiente) {
+      headers['x-ambiente'] = ambiente;
+    }
+
     this.client = axios.create({
-      baseURL: process.env.CONEXOS_BASE_URL || 'https://columbiatrading.conexos.cloud/api',
+      baseURL: process.env.CONEXOS_BASE_URL || 'http://212.85.22.104:3000/api',
       timeout: 40000,
+      headers,
     });
   }
 
@@ -28,10 +36,10 @@ class ConexosService {
   }
 
   async login(sessionToKill?: string): Promise<void> {
-    boxLog('Conexos: login attempt', { sessionToKill });
-    const username = process.env.CONEXOS_USERNAME || 'MPS_FRANCINEI';
-    const password = process.env.CONEXOS_PASSWORD || 'Abc123456@';
-    if (DEBUG_VERBOSE) console.log('[Conexos] Tentando login...', sessionToKill ? `(matando sessão ${sessionToKill.substring(0, 8)}...)` : '');
+    const username = process.env.CONEXOS_USERNAME || 'ROBO_NOTAS';
+    const password = process.env.CONEXOS_PASSWORD || '76E69803C';
+
+    console.log(`[Conexos] Login: tentando...${sessionToKill ? ` (matando sessão ${sessionToKill})` : ''}`);
 
     const body: { username: string; password: string; sessionToKill?: string } = { username, password };
     if (sessionToKill) {
@@ -40,34 +48,28 @@ class ConexosService {
 
     try {
       const resp = await this.client.post('/login', body);
-      if (DEBUG_VERBOSE) console.log('[Conexos] Login response status:', resp.status);
-      if (DEBUG_VERBOSE) console.log('[Conexos] Login response headers:', Object.keys(resp.headers));
+      console.log(`[Conexos] Login: resposta status=${resp.status}, headers=[${Object.keys(resp.headers).join(', ')}]`);
+      console.log(`[Conexos] Login: set-cookie =`, resp.headers['set-cookie']);
       const sid = this.extractSidFromSetCookie(resp.headers['set-cookie']);
-      if (!sid) throw new Error('Falha ao obter sid do login Conexos');
+      if (!sid) throw new Error('Falha ao obter sid do login Conexos (cookie ausente na resposta)');
       this.sid = sid;
-      if (DEBUG_VERBOSE) console.log('[Conexos] Login bem sucedido, sid armazenado');
-      // Opcional: definir validade do sid (ex: 30min)
+      console.log(`[Conexos] Login: sucesso! SID=${sid.substring(0, 8)}...`);
       this.sidExpiresAt = Date.now() + 25 * 60 * 1000;
     } catch (err: any) {
-      console.error('[Conexos] ERRO no login:');
-      console.error('[Conexos] Status:', err.response?.status);
-      console.error('[Conexos] Data:', JSON.stringify(err.response?.data || err.message));
+      console.error(`[Conexos] Login ERRO${sessionToKill ? ' (retry)' : ''}:`);
+      console.error(`[Conexos]   Status: ${err.response?.status ?? 'N/A'}`);
+      console.error(`[Conexos]   Data: ${JSON.stringify(err.response?.data || err.message)}`);
 
-      // Tratar erro de max sessions
+      // Tratar erro de max sessions (só tenta 1x)
       const errorData = err.response?.data;
       if (errorData?.type === 'LOGIN_ERROR_MAX_SESSIONS' && Array.isArray(errorData.sessions) && !sessionToKill) {
-        if (DEBUG_VERBOSE) console.log('[Conexos] Limite de sessões atingido. Encontrando sessão mais antiga para encerrar...');
-
-        // Encontrar a sessão mais antiga (menor sessionLastAccessedTime)
         const sessions = errorData.sessions as Array<{ sessionId: string; sessionLastAccessedTime: number }>;
         const oldestSession = sessions.reduce((oldest, current) =>
           current.sessionLastAccessedTime < oldest.sessionLastAccessedTime ? current : oldest
         );
 
-        if (DEBUG_VERBOSE) console.log('[Conexos] Encerrando sessão mais antiga:', oldestSession.sessionId,
-          '(último acesso:', new Date(oldestSession.sessionLastAccessedTime).toISOString(), ')');
+        console.log(`[Conexos] ${sessions.length} sessões ativas. Matando a mais antiga: ${oldestSession.sessionId}`);
 
-        // Refazer login matando a sessão mais antiga
         return this.login(oldestSession.sessionId);
       }
 
@@ -77,7 +79,17 @@ class ConexosService {
 
   async ensureSid() {
     if (!this.sid || (this.sidExpiresAt && Date.now() > this.sidExpiresAt)) {
-      await this.login();
+      // Mutex: se já há um login em andamento, aguarda ele ao invés de disparar outro
+      if (this.loginPromise) {
+        await this.loginPromise;
+        return;
+      }
+      this.loginPromise = this.login();
+      try {
+        await this.loginPromise;
+      } finally {
+        this.loginPromise = null;
+      }
     }
   }
 
@@ -135,7 +147,12 @@ class ConexosService {
     console.log(`${separator}\n`);
   }
 
-  async getContracts(filCod: number = config.conexos.filCod, pageSize = 100) {
+  async getContracts(
+    filCod: number = config.conexos.filCod,
+    pageSize = 100,
+    maxRows = 200,
+    opts?: { dateFrom?: string; dateTo?: string; startPage?: number }
+  ): Promise<{ rows: any[]; totalAvailable: number; nextPage: number; hasMore: boolean }> {
     await this.ensureSid();
     const headers = {
       ...this.getAuthHeaders(),
@@ -147,46 +164,65 @@ class ConexosService {
     };
     const url = '/imp059/list';
     const getHeaders = () => ({ ...headers, ...this.getAuthHeaders() });
+
+    // Build filterList with optional date range
+    const filterList: Record<string, any> = { "vldStatus#IN": ["1"] };
+    if (opts?.dateFrom) {
+      // Convert YYYY-MM-DD to timestamp ms (start of day in BRT -03:00)
+      const ts = new Date(`${opts.dateFrom}T00:00:00-03:00`).getTime();
+      filterList["imcDtaFechamento#GE"] = ts;
+    }
+    if (opts?.dateTo) {
+      // End of day in BRT -03:00
+      const ts = new Date(`${opts.dateTo}T23:59:59-03:00`).getTime();
+      filterList["imcDtaFechamento#LE"] = ts;
+    }
+
+    const startPage = opts?.startPage ?? 1;
+
     const doRequest = async (pageNumber: number) => {
       const body = {
         fieldList: [],
-        filterList: { "vldStatus#IN": ["1"] },
+        filterList,
         pageNumber,
         pageSize,
         serviceName: "imp059",
         orderList: { orderList: [{ propertyName: "imcCod", order: "desc" }] }
       };
+      console.log(`[getContracts] POST ${url} page=${pageNumber} filCod=${filCod} ...`);
+      const t0 = Date.now();
       const resp = await this.client.post(url, body, { headers: getHeaders() });
+      console.log(`[getContracts] page=${pageNumber} → ${resp.data?.rows?.length ?? 0} rows, count=${resp.data?.count ?? '?'} (${Date.now() - t0}ms)`);
       return resp.data;
     };
-    try {
+    const fetchAll = async () => {
       let allRows: any[] = [];
-      let pageNumber = 1;
+      let pageNumber = startPage;
+      let totalAvailable = 0;
       let hasMorePages = true;
       while (hasMorePages) {
         const data = await doRequest(pageNumber);
         const rows = data?.rows || [];
-        const count = data?.count ?? 0;
+        totalAvailable = data?.count ?? 0;
         allRows = allRows.concat(rows);
-        hasMorePages = count > pageSize && allRows.length < count;
+        if (allRows.length >= maxRows) {
+          allRows = allRows.slice(0, maxRows);
+          console.log(`[getContracts] Limite de ${maxRows} atingido (total disponível: ${totalAvailable})`);
+          break;
+        }
+        hasMorePages = totalAvailable > pageSize && allRows.length < totalAvailable;
         pageNumber++;
       }
-      return allRows;
+      console.log(`[getContracts] Total retornado: ${allRows.length} contratos`);
+      const hasMore = allRows.length < totalAvailable;
+      return { rows: allRows, totalAvailable, nextPage: pageNumber, hasMore };
+    };
+    try {
+      return await fetchAll();
     } catch (err: any) {
       if (err.response && err.response.status === 401) {
         await this.login();
-        let allRows: any[] = [];
-        let pageNumber = 1;
-        let hasMorePages = true;
-        while (hasMorePages) {
-          const data = await doRequest(pageNumber);
-          const rows = data?.rows || [];
-          const count = data?.count ?? 0;
-          allRows = allRows.concat(rows);
-          hasMorePages = count > pageSize && allRows.length < count;
-          pageNumber++;
-        }
-        return allRows;
+        return await fetchAll();
       }
       throw err;
     }
@@ -697,7 +733,8 @@ class ConexosService {
     await this.ensureSid();
 
     if (DEBUG_VERBOSE) console.log('\n========== getProcessesWithContracts (Fluxo V2) ==========');
-    const contracts = await this.getContracts();
+    const contractResult = await this.getContracts();
+    const contracts = contractResult.rows;
     const contractsCount = contracts?.length || 0;
     if (DEBUG_VERBOSE) console.log('[1] Contratos encontrados:', contractsCount);
 
@@ -766,15 +803,29 @@ class ConexosService {
     };
   }
 
-  async getProcessesWithContractsEnriched() {
+  async getProcessesWithContractsEnriched(opts?: {
+    cursor?: number;
+    dateFrom?: string;
+    dateTo?: string;
+  }) {
     await this.ensureSid();
 
     if (DEBUG_VERBOSE) console.log('\n========== getProcessesWithContracts (Enriched) ==========');
-    const contracts = await this.getContracts();
+    const contractResult = await this.getContracts(
+      config.conexos.filCod,
+      100,
+      200,
+      { dateFrom: opts?.dateFrom, dateTo: opts?.dateTo, startPage: opts?.cursor }
+    );
+    const contracts = contractResult.rows;
     const contractsCount = contracts?.length || 0;
     if (DEBUG_VERBOSE) console.log('[1] Contratos encontrados:', contractsCount);
     if (contractsCount === 0) {
-      return { processes: [], contracts: [] };
+      return {
+        processes: [], contracts: [],
+        totalProcesses: 0, totalContracts: 0,
+        pagination: { nextCursor: null, hasMore: false, totalContractsAvailable: contractResult.totalAvailable },
+      };
     }
     const processContractMap = new Map<number, any[]>();
     const allPriCods = new Set<number>();
@@ -929,6 +980,11 @@ class ConexosService {
       contracts,
       totalProcesses: processesWithContracts.length,
       totalContracts: contracts.length,
+      pagination: {
+        nextCursor: contractResult.hasMore ? contractResult.nextPage : null,
+        hasMore: contractResult.hasMore,
+        totalContractsAvailable: contractResult.totalAvailable,
+      },
     };
   }
 
@@ -951,7 +1007,8 @@ class ConexosService {
 
     // 2. Buscar TODOS os contratos e vincular aos processos (mesma estratégia da home)
     console.log('[getProcessesForExport] 2/4 Buscando e vinculando contratos aos processos...');
-    const allContracts = await this.getContracts(filCod);
+    const allContractsResult = await this.getContracts(filCod);
+    const allContracts = allContractsResult.rows;
 
     // Criar mapa priCod -> contratos usando API Conexos (mesmo método da home)
     const contractsByProcess = new Map<number, any[]>();
@@ -1648,7 +1705,8 @@ class ConexosService {
 
     // 1. Buscar contratos e vincular a processos (mesma lógica da V1)
     console.log('[ExportV2] 1/4 Buscando contratos de câmbio...');
-    const allContracts = await this.getContracts(filCod);
+    const allContractsResult = await this.getContracts(filCod);
+    const allContracts = allContractsResult.rows;
     console.log(`[ExportV2] Contratos encontrados: ${allContracts.length}`);
 
     const contractsByProcess = new Map<number, any[]>();
@@ -1786,7 +1844,7 @@ class ConexosService {
   async getValorPermutar(): Promise<number> {
     await this.ensureSid();
 
-    const baseURL = this.client.defaults.baseURL || 'https://columbiatrading.conexos.cloud/api';
+    const baseURL = this.client.defaults.baseURL || 'http://212.85.22.104:3000/api';
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
@@ -1902,7 +1960,7 @@ class ConexosService {
   }>> {
     await this.ensureSid();
 
-    const baseURL = this.client.defaults.baseURL || 'https://columbiatrading.conexos.cloud/api';
+    const baseURL = this.client.defaults.baseURL || 'http://212.85.22.104:3000/api';
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',

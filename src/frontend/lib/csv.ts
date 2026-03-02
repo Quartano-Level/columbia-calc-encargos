@@ -1758,7 +1758,7 @@ export function exportDelaysV2PDF({ processes, cdiHistory, dataProv, valorPermut
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Encargos Financeiros — Columbia Trading</title>
+<title>Encargos Financeiros — Level</title>
 <style>
 @page { size: A4 landscape; margin: 12mm 10mm; }
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1798,7 +1798,7 @@ tbody tr.footer-row td { background: #FFF3E0; font-weight: 700; }
 
 <div class="hdr">
   <div>
-    <div class="hdr-title">Columbia Trading — Encargos Financeiros</div>
+    <div class="hdr-title">Level — Encargos Financeiros</div>
     <div class="hdr-sub">Data Prov: <strong>${dataProvStr}</strong>&nbsp;&nbsp;·&nbsp;&nbsp;Emitido em ${emitidoEm}&nbsp;&nbsp;·&nbsp;&nbsp;${totalProcessos} processos</div>
   </div>
   <div class="hdr-right">
