@@ -1,4 +1,5 @@
 import { bcbService } from './bcb.js';
+import { calcEncargosCompostos } from './encargos-calculator.js';
 import { boxLog } from '../utils/index.js';
 
 export class CDICalculatorService {
@@ -36,7 +37,7 @@ export class CDICalculatorService {
         }
 
         const { factor, days } = await bcbService.getAccumulatedFactor(startDate, endDate);
-        const lostInterest = principal * (factor - 1);
+        const lostInterest = calcEncargosCompostos(principal, factor);
 
         return {
             lostInterest,
