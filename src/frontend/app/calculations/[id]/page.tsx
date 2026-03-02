@@ -87,7 +87,7 @@ export default function CalculationDetailPage() {
           <button
             onClick={submitCalculation}
             disabled={submitting || calculation?.status === 'submitted'}
-            className={`px-3 py-2 rounded text-white ${calculation?.status === 'submitted' ? 'bg-green-500' : 'bg-blue-600 hover:bg-blue-700'}`}
+            className={`px-3 py-2 rounded text-white ${calculation?.status === 'submitted' ? 'bg-green-500' : 'bg-blue-400 hover:bg-blue-500'}`}
           >{submitting ? 'Enviando...' : (calculation?.status === 'submitted' ? 'Submetido' : 'Submeter')}</button>
         </div>
       </div>
