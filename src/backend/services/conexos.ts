@@ -1705,9 +1705,9 @@ class ConexosService {
 
     // 1. Buscar contratos e vincular a processos (mesma lógica da V1)
     console.log('[ExportV2] 1/4 Buscando contratos de câmbio...');
-    const allContractsResult = await this.getContracts(filCod);
+    const allContractsResult = await this.getContracts(filCod, 100, 200, { dateFrom: '2026-01-01' });
     const allContracts = allContractsResult.rows;
-    console.log(`[ExportV2] Contratos encontrados: ${allContracts.length}`);
+    console.log(`[ExportV2] Contratos encontrados (DataFechamento >= 2026-01-01): ${allContracts.length}`);
 
     const contractsByProcess = new Map<number, any[]>();
     const allPriCods = new Set<number>();

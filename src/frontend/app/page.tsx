@@ -167,9 +167,13 @@ export default function Home() {
 	const fetchExportDataV2 = async () => {
 		const allProcesses: any[] = [];
 
-		for (let filCod = 1; filCod <= 7; filCod++) {
-			setExportStep(`Filial ${filCod}/7 — Buscando processos, NFs, títulos e encargos...`);
-			setExportProgress({ current: filCod, total: 7 });
+		const TOTAL_FILIAIS = 23; // 24 filiais, pulando a 23
+		let filialIdx = 0;
+		for (let filCod = 1; filCod <= 24; filCod++) {
+			if (filCod === 23) continue;
+			filialIdx++;
+			setExportStep(`Filial ${filCod} (${filialIdx}/${TOTAL_FILIAIS}) — Buscando processos, NFs, títulos e encargos...`);
+			setExportProgress({ current: filialIdx, total: TOTAL_FILIAIS });
 			const { processes: exportProcesses } = await fetchProcessesForExportV2(filCod);
 			allProcesses.push(...exportProcesses);
 		}

@@ -42,8 +42,8 @@ router.get('/for-export-v2', async (req, res) => {
   try {
     const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : 2;
 
-    if (isNaN(filCod) || filCod < 1 || filCod > 7) {
-      return res.status(400).json({ error: 'filCod inválido. Deve ser entre 1 e 7.' });
+    if (isNaN(filCod) || filCod < 1 || filCod > 24 || filCod === 23) {
+      return res.status(400).json({ error: 'filCod inválido. Deve ser entre 1 e 24 (exceto 23).' });
     }
 
     console.log(`[processes/for-export-v2] ✓ Rota executada (filCod=${filCod})`);
@@ -63,9 +63,9 @@ router.get('/for-export', async (req, res) => {
   try {
     const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : 2;
 
-    if (isNaN(filCod) || filCod < 1 || filCod > 7) {
+    if (isNaN(filCod) || filCod < 1 || filCod > 24 || filCod === 23) {
       return res.status(400).json({
-        error: 'filCod inválido. Deve ser entre 1 e 7.'
+        error: 'filCod inválido. Deve ser entre 1 e 24 (exceto 23).'
       });
     }
 
