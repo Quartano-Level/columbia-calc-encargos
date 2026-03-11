@@ -425,18 +425,6 @@ export default function ProcessCalculatorPage() {
 								/>
 							</div>
 							<div>
-								<Label className="text-sm text-gray-600">Data Faturamento (Invoice/Proforma) *</Label>
-								<Input
-									type="date"
-									value={formState.dataFaturamento}
-									onChange={(e) => setFormState(prev => ({
-										...prev,
-										dataFaturamento: e.target.value
-									}))}
-									className="border-blue-400"
-								/>
-							</div>
-							<div>
 								<Label className="text-sm text-gray-600">Prazo (em dias) *</Label>
 								<Input
 									type="number"
@@ -447,15 +435,6 @@ export default function ProcessCalculatorPage() {
 									}))}
 									className="border-blue-400"
 									placeholder="Ex: 30"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Vencimento Cliente (calculado)</Label>
-								<Input
-									type="date"
-									value={formState.vencimentoCliente}
-									disabled
-									className="bg-green-50"
 								/>
 							</div>
 							<div>
@@ -584,7 +563,7 @@ export default function ProcessCalculatorPage() {
 					<CardContent className="pt-6">
 						<div className="grid grid-cols-2 gap-4 mb-4">
 							<div>
-								<Label className="text-sm text-gray-600">CDI do dia do fechamento (ao ano) *</Label>
+								<Label className="text-sm text-gray-600">Taxa do dia do fechamento (ao ano) *</Label>
 								<div className="flex gap-2">
 									<Input
 										type="number"
