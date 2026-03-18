@@ -3,6 +3,7 @@ import { DM_Sans } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { AppLayout } from '@/components/app-layout'
 import { AuthProvider } from '@/components/auth-provider'
+import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
 const dmSans = DM_Sans({ subsets: ["latin"] });
@@ -25,6 +26,7 @@ export default function RootLayout({
           <AppLayout>{children}</AppLayout>
         </AuthProvider>
         <Analytics />
+        <Toaster />
       </body>
     </html>
   )

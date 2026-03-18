@@ -212,6 +212,21 @@ export async function fetchEncargosFinanceirosByProcess(priCod: number): Promise
 	}
 }
 
+/** Retorna todas as despesas de um processo */
+export async function fetchExpensesByProcess(priCod: number): Promise<any[]> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/expenses`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return [];
+		const data = await response.json();
+		return Array.isArray(data?.data) ? data.data : (data?.data?.rows || []);
+	} catch {
+		return [];
+	}
+}
+
 export async function fetchCDI(startDate?: string, endDate?: string): Promise<any[]> {
 	const params = new URLSearchParams();
 	if (startDate) params.append('startDate', startDate);
@@ -394,7 +409,7 @@ export async function fetchCalculationsSummary(months = 6): Promise<MonthlySumma
 	}
 }
 
-/** Busca o total de Valor a Permutar (mnyTitPermutar) da INOX Tech (pesCod=191) via com299 */
+/** Busca o total de Valor a Permutar (mnyTitPermutar) de todos os adiantamentos via com299 */
 export async function fetchValorPermutar(): Promise<number> {
   try {
     const response = await fetch(`${API_BASE_URL}/com299/valor-permutar`, {
@@ -414,6 +429,7 @@ export async function fetchValorPermutar(): Promise<number> {
 
 export interface Com299Row {
   docCod: number;
+  priCod: number;
   mnyBruto: number;
   mnyAcrescimo: number;
   mnyDesconto: number;
@@ -422,9 +438,11 @@ export interface Com299Row {
   mnyTitPermuta: number;
   mnyTitAberto: number;
   mnyTitPermutar: number;
+  docDtaEmissao: string | null;
+  borDtaFinalizado: string | null;
 }
 
-/** Busca lista completa com299 (INOX Tech) para exportação */
+/** Busca lista completa com299 (adiantamentos) para exportação */
 export async function fetchCom299List(): Promise<Com299Row[]> {
   try {
     const response = await fetch(`${API_BASE_URL}/com299/list`, {
@@ -442,14 +460,21 @@ export async function fetchCom299List(): Promise<Com299Row[]> {
   }
 }
 
-export async function submitToConexos(id: string, result: CalculationResult & { clientName: string }): Promise<{ success: boolean; message: string }> {
+export interface SubmitToConexosPayload {
+	processId: string;
+	emissionDate: string;
+	totalInterest: number;
+	taxaDolarFiscal?: number;
+}
+
+export async function submitToConexos(id: string, payload: SubmitToConexosPayload): Promise<{ success: boolean; message: string }> {
 	const response = await fetch(`${API_BASE_URL}/calculations/${id}/submit`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
 			"Accept": "application/json",
 		},
-		body: JSON.stringify(result),
+		body: JSON.stringify(payload),
 	});
 	if (!response.ok) throw new Error(`API Error: ${response.status}`);
 	return await response.json();

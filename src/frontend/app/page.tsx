@@ -63,6 +63,7 @@ export default function Home() {
 		priVldImpexpDesc: string;
 		createdAt: string;
 		contracts: any[];
+		expenses: any[];
 		totalValue: string;
 		hasDelay: boolean;
 		totalLostInterest: number;
@@ -189,7 +190,7 @@ export default function Home() {
 	const exportToXLSX = async () => {
 		try {
 			setExporting(true);
-			setExportStep("Buscando Valor a Permutar e lista com299 (INOX)...");
+			setExportStep("Buscando Valor a Permutar e adiantamentos (com299)...");
 			const [valorPermutar, com299List] = await Promise.all([
 				fetchValorPermutar(),
 				fetchCom299List().catch(() => []),
@@ -217,7 +218,7 @@ export default function Home() {
 		setShowDatePicker(false);
 		try {
 			setExporting(true);
-			setExportStep("Buscando Valor a Permutar e lista com299 (INOX)...");
+			setExportStep("Buscando Valor a Permutar e adiantamentos (com299)...");
 			const [valorPermutar, com299List] = await Promise.all([
 				fetchValorPermutar(),
 				fetchCom299List().catch(() => []),
@@ -283,6 +284,7 @@ export default function Home() {
 				priVldImpexpDesc: p.incoterm || "—",
 				createdAt: (p as any).priDtaAbertura ? new Date((p as any).priDtaAbertura).toISOString() : "",
 				contracts: p.contracts || [],
+				expenses: p.expenses || [],
 				totalValue: new Intl.NumberFormat("pt-BR", { style: "currency", currency: "USD" }).format(
 					(p.contracts || []).reduce((sum: number, c: any) => sum + (Number(c.vlrMneg) || 0), 0)
 				),
@@ -588,7 +590,8 @@ export default function Home() {
 								<th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Cliente</th>
 								<th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Incoterm</th>
 								<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Valor Total</th>
-								<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Contratos</th>
+								<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Itens</th>
+							<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase w-24"></th>
 							</tr>
 						</thead>
 						<tbody>
@@ -621,14 +624,33 @@ export default function Home() {
 												{process.totalValue}
 											</td>
 											<td className="px-4 py-3 text-right">
-												<span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${isExpanded ? "bg-[#337ab7] text-white" : "bg-gray-100 text-gray-500"}`}>
-													{process.contracts.length} Contr.
-												</span>
+												<div className="flex items-center justify-end gap-1.5">
+													<span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${isExpanded ? "bg-[#337ab7] text-white" : "bg-gray-100 text-gray-500"}`}>
+														{process.contracts.length} Contr.
+													</span>
+													{process.expenses.length > 0 && (
+														<span className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${isExpanded ? "bg-gray-600 text-white" : "bg-gray-100 text-gray-500"}`}>
+															{process.expenses.length} Desp.
+														</span>
+													)}
+												</div>
+											</td>
+											<td className="px-4 py-3 text-right">
+												<Button
+													size="sm"
+													className="h-7 px-3 text-[10px] bg-[#337ab7] hover:bg-blue-700 text-white font-bold rounded shadow-sm"
+													onClick={(e) => {
+														e.stopPropagation();
+														router.push(`/processes/${process.id}`);
+													}}
+												>
+													CALCULAR
+												</Button>
 											</td>
 										</tr>
 										{isExpanded && (
 											<tr className="bg-gray-50/40 animate-in fade-in duration-300">
-												<td colSpan={7} className="px-0 py-0">
+												<td colSpan={8} className="px-0 py-0">
 													<div className="px-4 pb-4 pt-1 ml-12 mr-4 border-l-2 border-blue-200/50">
 														<div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
 															<table className="w-full">
@@ -640,7 +662,6 @@ export default function Home() {
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Moeda</th>
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-right tracking-wider">Vlr. Negociado</th>
 																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-right tracking-wider">Vlr. Nacional</th>
-																		<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-right tracking-wider w-20">Ação</th>
 																	</tr>
 																</thead>
 																<tbody className="divide-y divide-gray-50">
@@ -672,24 +693,12 @@ export default function Home() {
 																						? new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(contract.vlrTotalNac)
 																						: "—"}
 																				</td>
-																				<td className="px-3 py-2 text-right">
-																					<Button
-																						size="sm"
-																						className="h-6 px-2 text-[9px] bg-[#337ab7] hover:bg-blue-700 text-white font-bold rounded shadow-sm w-full"
-																						onClick={(e) => {
-																							e.stopPropagation();
-																							router.push(`/processes/${process.id}?contractId=${contract.imcCod}`);
-																						}}
-																					>
-																						CALCULAR
-																					</Button>
-																				</td>
 																			</tr>
 																		);
 																	})}
 																	{process.contracts.length === 0 && (
 																		<tr>
-																			<td colSpan={8} className="py-3 text-center text-xs text-gray-400 italic">
+																			<td colSpan={6} className="py-3 text-center text-xs text-gray-400 italic">
 																				Nenhum contrato encontrado.
 																			</td>
 																		</tr>
@@ -697,6 +706,57 @@ export default function Home() {
 																</tbody>
 															</table>
 														</div>
+
+														{/* Despesas do Processo */}
+														{process.expenses.length > 0 && (
+															<div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden mt-3">
+																<div className="px-3 py-2 bg-orange-50/50 border-b border-gray-100">
+																	<span className="text-[9px] font-black text-orange-400 uppercase tracking-wider">
+																		Despesas do Processo
+																	</span>
+																</div>
+																<table className="w-full">
+																	<thead>
+																		<tr className="bg-gray-50/80 border-b border-gray-100">
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Conta de Projeto</th>
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Encargo</th>
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Situação</th>
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-left tracking-wider">Moeda</th>
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-right tracking-wider">Vlr. Moeda Negociada</th>
+																			<th className="px-3 py-2 text-[9px] font-black text-gray-400 uppercase text-right tracking-wider">Vlr. Moeda Nacional</th>
+																		</tr>
+																	</thead>
+																	<tbody className="divide-y divide-gray-50">
+																		{process.expenses.map((exp: any, i: number) => (
+																			<tr key={i} className="hover:bg-orange-50/5 transition-colors">
+																				<td className="px-3 py-2 text-[11px] text-gray-600">{exp.ctpDesNome || '—'}</td>
+																				<td className="px-3 py-2 text-[11px] text-gray-700 font-medium">{exp.impDesNome || '—'}</td>
+																				<td className="px-3 py-2">
+																					<span className={`px-1.5 py-0 rounded text-[8px] font-bold uppercase border ${
+																						String(exp.pidVldStatus) === '1'
+																							? 'bg-green-50 text-green-600 border-green-100'
+																							: 'bg-gray-50 text-gray-500 border-gray-100'
+																					}`}>
+																						{String(exp.pidVldStatus) === '1' ? 'Ativa' : 'Inativa'}
+																					</span>
+																				</td>
+																				<td className="px-3 py-2 text-[11px] text-gray-600">{exp.moeEspNome || '—'}</td>
+																				<td className="px-3 py-2 text-[11px] text-right text-gray-800">
+																					{exp.pidMnyValorMneg
+																						? new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(exp.pidMnyValorMneg))
+																						: '—'}
+																				</td>
+																				<td className="px-3 py-2 text-[11px] text-right text-gray-800">
+																					{exp.pidMnyValormn
+																						? formatBRL(Number(exp.pidMnyValormn))
+																						: '—'}
+																				</td>
+																			</tr>
+																		))}
+																	</tbody>
+																</table>
+															</div>
+														)}
 													</div>
 												</td>
 											</tr>

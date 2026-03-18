@@ -15,6 +15,8 @@ export interface Process {
 	imcNumNumero?: string;
 	expenses?: any[];
 	hasExistingInterest?: boolean;
+	hasFinalizedInvoice?: boolean;
+	billingTermDays?: number | null;
 }
 
 export interface Payment {
@@ -148,6 +150,7 @@ export interface CalculatorFormState {
 
 	// Deck 2: Contract Info
 	dataFechamento: string;
+	dataConversao?: string;
 	dataFaturamento: string;
 	prazoEmDias: number; // INPUT
 	vencimentoCliente: string; // calculated
@@ -162,6 +165,7 @@ export interface CalculatorFormState {
 	// Calculation
 	cdiAoAno: number | null;
 	cdiMensal?: number | null;
+	spread: number; // Adicional sobre CDI (ex: 0.6 para CDI+0.6%)
 	encargosCalculados: number;
 	variacaoCambial?: number;
 }

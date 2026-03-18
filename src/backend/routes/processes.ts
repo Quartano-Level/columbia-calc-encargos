@@ -85,9 +85,14 @@ router.get('/for-export', async (req, res) => {
 router.get('/with-contracts', async (_req, res) => {
   try {
     const result = await conexosService.getProcessesWithContractsEnriched();
+    const visibleProcesses = (result.processes || []).filter((p: any) => !p.hasFinalizedInvoice);
     res.json({
       source: 'conexos',
-      data: result,
+      data: {
+        ...result,
+        processes: visibleProcesses,
+        totalProcesses: visibleProcesses.length,
+      },
     });
   } catch (err: any) {
     console.error('[processes/with-contracts] Error:', err.message);
@@ -308,6 +313,28 @@ router.get('/:id', async (req, res) => {
         (d.impDesNome || d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
       ),
     };
+
+    // Prazo padrão de faturamento do cliente (cmn019/duplicatas -> dupNumDiasVcto)
+    let billingTermDays: number | null = null;
+    try {
+      billingTermDays = await conexosService.getClientBillingTermDays({
+        personName: normalizedProcess.clientName || rawProcess?.dpeNomPessoa || null,
+      });
+      if (process.env.DEBUG_VERBOSE === '1') {
+        console.log(
+          `[processes/:id billingTerm] priCod=${priCod} client="${normalizedProcess.clientName || ''}" billingTermDays=${billingTermDays ?? 'null'}`
+        );
+      }
+      if (billingTermDays == null) {
+        console.warn(
+          `[processes/:id billingTerm] priCod=${priCod} sem prazo encontrado (null). Verifique pgtCod/dupNumDiasVcto no cmn019 para esse cliente.`
+        );
+      }
+    } catch (e) {
+      console.warn('[GET /processes/:id] Erro ao buscar prazo de faturamento (cmn019):', e);
+    }
+
+    (normalizedProcess as any).billingTermDays = billingTermDays;
 
     res.json({ source: 'conexos', data: { process: normalizedProcess, payments, parcelsError } });
   } catch (err: any) {

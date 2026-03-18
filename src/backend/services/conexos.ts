@@ -231,7 +231,7 @@ class ConexosService {
     }
   }
 
-  async getProcesses(filters?: { priCod?: string; priCodIn?: number[]; priEspRefcliente?: string }, filCod: number = config.conexos.filCod) {
+  async getProcesses(filters?: { priCod?: string; priCodIn?: number[]; priEspRefcliente?: string; dateFrom?: string }, filCod: number = config.conexos.filCod) {
     boxLog('Conexos: getProcesses Input', filters);
     await this.ensureSid();
     const filterList: Record<string, any> = { "priVldStatus#IN": ["1"] };
@@ -243,6 +243,9 @@ class ConexosService {
     }
     if (filters?.priEspRefcliente) {
       filterList["priEspRefcliente#LIKE"] = `%${filters.priEspRefcliente}%`;
+    }
+    if (filters?.dateFrom) {
+      filterList["priDtaAbertura#GE"] = new Date(`${filters.dateFrom}T00:00:00-03:00`).getTime();
     }
 
     const body = {
@@ -780,22 +783,26 @@ class ConexosService {
     const allPriCods = new Set<number>();
     if (DEBUG_VERBOSE) console.log('[2] Buscando processos para cada contrato...');
 
-    const contractPromises = contracts.map(async (contract: any) => {
-      if (!contract.imcCod) return;
-      const relatedProcs = await this.getProcessesByContractId(contract.imcCod);
-      if (relatedProcs && relatedProcs.length > 0) {
-        relatedProcs.forEach((rp: any) => {
-          if (rp.priCod) {
-            allPriCods.add(rp.priCod);
-            const existing = processContractMap.get(rp.priCod) || [];
-            existing.push(contract);
-            processContractMap.set(rp.priCod, existing);
-          }
-        });
-      }
-    });
-
-    await Promise.all(contractPromises);
+    // Batches de 20 para não saturar o Conexos (mesmo padrão do export V2)
+    const BATCH_SIZE = 20;
+    for (let i = 0; i < contracts.length; i += BATCH_SIZE) {
+      const batch = contracts.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (contract: any) => {
+        if (!contract.imcCod) return;
+        const relatedProcs = await this.getProcessesByContractId(contract.imcCod);
+        if (relatedProcs && relatedProcs.length > 0) {
+          relatedProcs.forEach((rp: any) => {
+            if (rp.priCod) {
+              allPriCods.add(rp.priCod);
+              const existing = processContractMap.get(rp.priCod) || [];
+              existing.push(contract);
+              processContractMap.set(rp.priCod, existing);
+            }
+          });
+        }
+      }));
+      if (DEBUG_VERBOSE) console.log(`[2]   Vinculados ${Math.min(i + BATCH_SIZE, contracts.length)}/${contracts.length} contratos`);
+    }
 
     const distinctProcessIds = Array.from(allPriCods);
     if (DEBUG_VERBOSE) console.log(`[2] Total de processos únicos identificados: ${distinctProcessIds.length}`);
@@ -807,20 +814,22 @@ class ConexosService {
     if (DEBUG_VERBOSE) console.log(`[3] Processos básicos recuperados: ${processes?.length || 0}`);
     if (DEBUG_VERBOSE) console.log('[4] Enriquecendo processos (log009 + psq015)...');
 
-    const enrichedPromises = processes.map(async (proc: any) => {
+    const processesWithContracts: any[] = [];
+    for (let i = 0; i < processes.length; i += BATCH_SIZE) {
+      const batch = processes.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(async (proc: any) => {
       const priCod = Number(proc.priCod);
       const relatedContracts = processContractMap.get(priCod) || [];
 
-      // Busca títulos financeiros (psq015) - para obter dados de pagamento"
-      const financialTitles = await this.getFinancialTitlesPsq015(priCod);
+      // Busca dados independentes em paralelo
+      const [financialTitles, despesas, invCod, hasFinalizedInvoice] = await Promise.all([
+        this.getFinancialTitlesPsq015(priCod),
+        this.getDespesasByProcessId(String(priCod)),
+        this.getInvoiceCodeLog009(priCod),
+        this.hasFinalizedInvoiceByProcess(priCod),
+      ]);
 
-      // Busca despesas já lançadas no Conexos
-      const despesas = await this.getDespesasByProcessId(String(priCod));
-
-      // Busca invCod via log009/parcelas/list (psq015 não retorna invCod)
-      const invCod = await this.getInvoiceCodeLog009(priCod);
-
-      // Busca detalhes (incoterm) se tiver invCod
+      // Busca detalhes (incoterm) se tiver invCod — depende do resultado acima
       let log009Data = null;
       if (invCod) {
         log009Data = await this.getProcessDetailsLog009(invCod);
@@ -908,6 +917,7 @@ class ConexosService {
           (d.impDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS') ||
           (d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
         ) : false,
+        hasFinalizedInvoice,
 
         // Dados resumidos do contrato para tabela
         contractData: relatedContracts.length > 0 ? {
@@ -920,9 +930,10 @@ class ConexosService {
         // Dados para exibição na tabela (compatibilidade)
         paymentData: paymentInfo
       };
-    });
-
-    const processesWithContracts = await Promise.all(enrichedPromises);
+    }));
+    processesWithContracts.push(...batchResults);
+    if (DEBUG_VERBOSE) console.log(`[4]   Enriquecidos ${Math.min(i + BATCH_SIZE, processes.length)}/${processes.length} processos`);
+  }
 
     return {
       processes: processesWithContracts,
@@ -1174,6 +1185,163 @@ class ConexosService {
       }
       return null;
     }
+  }
+
+  /**
+   * Consulta duplicatas em cmn019 com retry automático em 401.
+   * Retorna as rows cruas para extração flexível dos campos.
+   */
+  private async getCmn019DuplicatasRows(
+    filterList: Record<string, any>,
+    pageSize = 100,
+    traceLabel = 'cmn019'
+  ): Promise<any[]> {
+    await this.ensureSid();
+
+    const body = {
+      fieldList: [],
+      filterList,
+      pageNumber: 1,
+      pageSize,
+      orderList: { orderList: [{ propertyName: 'dupEspOrdem', order: 'asc' }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/cmn019/duplicatas/list';
+    try {
+      if (DEBUG_VERBOSE) {
+        console.log(`[${traceLabel}] POST ${url} filter=${JSON.stringify(filterList)} pageSize=${pageSize}`);
+      }
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || [];
+      if (DEBUG_VERBOSE) {
+        const sample = rows.slice(0, 3).map((r: any) => ({
+          pgtCod: r?.pgtCod,
+          pesCod: r?.pesCod,
+          dpeNomPessoa: r?.dpeNomPessoa,
+          dupNumDiasVcto: r?.dupNumDiasVcto,
+          dupEspOrdem: r?.dupEspOrdem,
+        }));
+        console.log(`[${traceLabel}] rows=${rows.length} sample=${JSON.stringify(sample)}`);
+      }
+      return rows;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        if (DEBUG_VERBOSE) {
+          console.log(`[${traceLabel}] 401 recebido em ${url}; tentando relogar...`);
+        }
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        const rows = retryResp.data?.rows || [];
+        if (DEBUG_VERBOSE) {
+          const sample = rows.slice(0, 3).map((r: any) => ({
+            pgtCod: r?.pgtCod,
+            pesCod: r?.pesCod,
+            dpeNomPessoa: r?.dpeNomPessoa,
+            dupNumDiasVcto: r?.dupNumDiasVcto,
+            dupEspOrdem: r?.dupEspOrdem,
+          }));
+          console.log(`[${traceLabel}] retry rows=${rows.length} sample=${JSON.stringify(sample)}`);
+        }
+        return rows;
+      }
+      console.error(`[${traceLabel}] Erro ao listar duplicatas:`, err.message);
+      return [];
+    }
+  }
+
+  /**
+   * Resolve pgtCod da pessoa via cmn019/duplicatas/list.
+   * Estratégia:
+   * 1) busca por nome completo usando LIKE;
+   * 2) fallback por substrings do nome (3 palavras, 2 palavras, 1 palavra relevante).
+   */
+  async resolvePgtCodByPerson(personName?: string | null): Promise<number | null> {
+    if (DEBUG_VERBOSE) {
+      console.log(`[cmn019.resolvePgtCodByPerson] start personName="${personName || ''}"`);
+    }
+
+    const trimmedName = (personName || '').trim();
+    if (!trimmedName) return null;
+
+    const words = trimmedName
+      .split(/\s+/)
+      .map(w => w.replace(/[^\p{L}\p{N}]/gu, '').trim())
+      .filter(Boolean);
+
+    const candidates: string[] = [];
+    candidates.push(trimmedName);
+    if (words.length >= 3) candidates.push(words.slice(0, 3).join(' '));
+    if (words.length >= 2) candidates.push(words.slice(0, 2).join(' '));
+    const significantWord = words.find(w => w.length >= 4);
+    if (significantWord) candidates.push(significantWord);
+
+    const uniqueCandidates = Array.from(new Set(candidates.map(c => c.trim()).filter(Boolean)));
+
+    for (const candidate of uniqueCandidates) {
+      const rowsByName = await this.getCmn019DuplicatasRows({ 'dpeNomPessoa#LIKE': `%${candidate}%` }, 50, `cmn019.byName(${candidate})`);
+      const pgtByName = rowsByName.find((r: any) => r?.pgtCod != null)?.pgtCod;
+      if (DEBUG_VERBOSE) {
+        console.log(`[cmn019.resolvePgtCodByPerson] query="%${candidate}%" pgtCod=${pgtByName ?? 'null'}`);
+      }
+      if (pgtByName != null) return Number(pgtByName);
+    }
+
+    return null;
+  }
+
+  /**
+   * Busca prazo padrão de faturamento em dias via pgtCod.
+   * Campo alvo: dupNumDiasVcto (rows do cmn019/duplicatas/list).
+   */
+  async getBillingTermDaysByPgtCod(pgtCod: number): Promise<number | null> {
+    if (!pgtCod || !Number.isFinite(Number(pgtCod))) return null;
+    const rows = await this.getCmn019DuplicatasRows({ 'pgtCod#EQ': String(pgtCod) }, 100, 'cmn019.byPgtCod');
+    const firstValid = rows.find((r: any) => r?.dupNumDiasVcto != null);
+    if (!firstValid) {
+      if (DEBUG_VERBOSE) {
+        console.log(`[cmn019.getBillingTermDaysByPgtCod] pgtCod=${pgtCod} sem dupNumDiasVcto válido`);
+      }
+      return null;
+    }
+    const days = Number(firstValid.dupNumDiasVcto);
+    if (DEBUG_VERBOSE) {
+      console.log(`[cmn019.getBillingTermDaysByPgtCod] pgtCod=${pgtCod} dupNumDiasVctoRaw=${firstValid.dupNumDiasVcto} parsed=${days}`);
+    }
+    return Number.isFinite(days) && days >= 0 ? days : null;
+  }
+
+  /**
+   * Resolve prazo padrão de faturamento em dias para o cliente.
+   * Retorna null quando não houver dados suficientes.
+   */
+  async getClientBillingTermDays(params: {
+    pgtCod?: number | null;
+    personName?: string | null;
+  }): Promise<number | null> {
+    if (DEBUG_VERBOSE) {
+      console.log(`[cmn019.getClientBillingTermDays] input pgtCod=${params.pgtCod ?? 'null'} personName="${params.personName || ''}"`);
+    }
+    const directPgtCod = params.pgtCod && Number.isFinite(Number(params.pgtCod))
+      ? Number(params.pgtCod)
+      : null;
+
+    const resolvedPgtCod = directPgtCod ?? await this.resolvePgtCodByPerson(params.personName ?? null);
+    if (!resolvedPgtCod) return null;
+
+    const days = await this.getBillingTermDaysByPgtCod(resolvedPgtCod);
+    if (DEBUG_VERBOSE) {
+      console.log(`[cmn019.getClientBillingTermDays] resolved person="${params.personName || ''}" pgtCod=${resolvedPgtCod} prazoDias=${days ?? 'null'}`);
+    }
+    return days;
   }
 
   async getFinancialTitlesPsq015(priCod: number, filCod: number = config.conexos.filCod) {
@@ -1549,6 +1717,51 @@ class ConexosService {
   }
 
   /**
+   * Verifica se processo possui pelo menos uma NF FINALIZADA na com297 (vldStatus=3).
+   */
+  async hasFinalizedInvoiceByProcess(priCod: number, filCod: number = config.conexos.filCod) {
+    if (!priCod) return false;
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ['docCod'],
+      filterList: {
+        'priCod#EQ': priCod,
+        'vldStatus#EQ': '3',
+      },
+      pageNumber: 1,
+      pageSize: 1,
+      serviceName: 'com297',
+      orderList: { orderList: [{ propertyName: 'docCod', order: 'desc' }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/com297/list';
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || [];
+      return rows.length > 0;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        const rows = retryResp.data?.rows || [];
+        return rows.length > 0;
+      }
+      console.error(`[com297] Erro ao verificar NF finalizada do processo ${priCod}:`, err.message);
+      return false;
+    }
+  }
+
+  /**
    * Busca títulos financeiros de uma nota fiscal (com311).
    * Retorna rows + summary (totalVlr, totalVlrPago).
    */
@@ -1599,6 +1812,49 @@ class ConexosService {
       }
       console.error(`[com311] Erro ao buscar títulos para docCod ${docCod}:`, err.message);
       return { rows: [], summary: { totalVlr: 0, totalVlrPago: 0 } };
+    }
+  }
+
+  /**
+   * Busca detalhamento de duplicata (composição) de um título financeiro.
+   * Endpoint: POST /com311/detalDuplicata/list/{docCod}/{titCod}
+   * Retorna as linhas de composição (FOB, FRETE INTERNACIONAL, etc.)
+   */
+  async getDetalDuplicata(docCod: number, titCod: number, filCod: number = config.conexos.filCod) {
+    if (!docCod || !titCod) return [];
+    await this.ensureSid();
+
+    const body = {
+      fieldList: [],
+      filterList: {},
+      pageNumber: 1,
+      pageSize: 50,
+      orderList: { orderList: [{ propertyName: "ftdNumOrdem", order: "asc" }] }
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = `/com311/detalDuplicata/list/${docCod}/${titCod}`;
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      const rows = resp.data?.rows || [];
+      if (DEBUG_VERBOSE) console.log(`[com311/detalDuplicata] docCod=${docCod} titCod=${titCod}: ${rows.length} linhas`);
+      return rows;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || [];
+      }
+      console.error(`[com311/detalDuplicata] Erro docCod=${docCod} titCod=${titCod}:`, err.message);
+      return [];
     }
   }
 
@@ -1687,8 +1943,8 @@ class ConexosService {
 
     // 2. Buscar dados dos processos (imp021)
     console.log('[ExportV2] 2/4 Buscando dados dos processos (imp021)...');
-    const processes = await this.getProcesses({ priCodIn: distinctPriCods }, filCod);
-    console.log(`[ExportV2] Processos recuperados: ${processes.length}`);
+    const processes = await this.getProcesses({ priCodIn: distinctPriCods, dateFrom: '2026-01-01' }, filCod);
+    console.log(`[ExportV2] Processos recuperados (priDtaAbertura >= 2026-01-01): ${processes.length}`);
     if (processes.length > 0) {
       console.log(`[ExportV2] filCods nos dados retornados: [${[...new Set(processes.map((p: any) => p.filCod))].join(', ')}]`);
     }
@@ -1723,25 +1979,30 @@ class ConexosService {
       totalInvoices += (proc.invoices || []).length;
     }
 
-    for (const proc of processResults) {
-      const enrichedInvoices: any[] = [];
+    // Enriquecer NFs de todos os processos em paralelo (batches de concurrency)
+    const allInvoiceJobs = processResults.flatMap((proc) =>
+      (proc.invoices || []).map((inv: any) => ({ proc, inv }))
+    );
 
-      for (let i = 0; i < (proc.invoices || []).length; i += concurrency) {
-        const batch = proc.invoices.slice(i, i + concurrency);
-        const enriched = await Promise.all(batch.map(async (inv: any) => {
-          const docCod = Number(inv.docCod);
-          const docTip = inv.docTip ?? 1;
-          const invFilCod = inv.filCod ?? filCod;
+    for (let i = 0; i < allInvoiceJobs.length; i += concurrency) {
+      const batch = allInvoiceJobs.slice(i, i + concurrency);
+      const enriched = await Promise.all(batch.map(async ({ proc, inv }) => {
+        const docCod = Number(inv.docCod);
+        const docTip = inv.docTip ?? 1;
+        const invFilCod = inv.filCod ?? filCod;
 
-          const [titlesData, encargos] = await Promise.all([
-            this.getTitlesByInvoice(docCod, invFilCod),
-            this.getEncargosGeraisByInvoice(docTip, docCod, invFilCod),
-          ]);
+        const [titlesData, encargos] = await Promise.all([
+          this.getTitlesByInvoice(docCod, invFilCod),
+          this.getEncargosGeraisByInvoice(docTip, docCod, invFilCod),
+        ]);
 
-          // Buscar data de baixa (borDtaMvto) via psq015/baixasTitulo para títulos pagos
-          const titlesWithDischargeDate = await Promise.all(
-            (titlesData.rows || []).map(async (title: any) => {
-              if (title.pago !== 1 && title.pago !== 2) return title;
+        // Buscar data de baixa (borDtaMvto) + detalDuplicata (composição FOB) para cada título
+        const titlesWithDetails = await Promise.all(
+          (titlesData.rows || []).map(async (title: any) => {
+            let enrichedTitle = { ...title };
+
+            // Baixas (psq015) para títulos pagos
+            if (title.pago === 1 || title.pago === 2) {
               try {
                 const discharges = await this.getTitleDischargesPsq015(title, invFilCod);
                 if (discharges && discharges.length > 0) {
@@ -1750,26 +2011,54 @@ class ConexosService {
                     const dB = new Date(b.borDtaMvto || 0).getTime();
                     return dB - dA;
                   });
-                  return { ...title, borDtaMvto: discharges[0].borDtaMvto };
+                  enrichedTitle.borDtaMvto = discharges[0].borDtaMvto;
                 }
               } catch (_) { /* ignora erros individuais */ }
-              return title;
-            })
-          );
+            }
 
-          enrichedCount++;
+            // Detalhamento de duplicata (com311/detalDuplicata) — composição do título
+            try {
+              const duplicatas = await this.getDetalDuplicata(docCod, title.titCod, invFilCod);
+              enrichedTitle.duplicatas = duplicatas;
+              const fobEntry = duplicatas.find((d: any) =>
+                (d.impDesNome || '').toUpperCase() === 'FOB' && d.ftdVldAcao === 1
+              );
+              if (fobEntry) {
+                enrichedTitle.fobValue = Number(fobEntry.ftdMnyValor);
+                enrichedTitle.fobImpCod = fobEntry.impCod;
+              }
+            } catch (_) { /* ignora erros individuais */ }
 
-          return {
+            return enrichedTitle;
+          })
+        );
+
+        enrichedCount++;
+
+        return {
+          proc,
+          enrichedInv: {
             ...inv,
-            titles: titlesWithDischargeDate,
+            titles: titlesWithDetails,
             titlesSummary: titlesData.summary,
             encargos,
-          };
-        }));
-        enrichedInvoices.push(...enriched);
-      }
+          },
+        };
+      }));
 
-      proc.invoices = enrichedInvoices;
+      // Atribuir NFs enriquecidas de volta aos processos
+      for (const { proc, enrichedInv } of enriched) {
+        if (!proc._enrichedInvoices) proc._enrichedInvoices = [];
+        proc._enrichedInvoices.push(enrichedInv);
+      }
+    }
+
+    // Substituir invoices originais pelas enriquecidas
+    for (const proc of processResults) {
+      if (proc._enrichedInvoices) {
+        proc.invoices = proc._enrichedInvoices;
+        delete proc._enrichedInvoices;
+      }
     }
 
     console.log(`[ExportV2] NFs enriquecidas: ${enrichedCount}/${totalInvoices}`);
@@ -1780,7 +2069,7 @@ class ConexosService {
   }
 
   /**
-   * Busca o total de "Valor a Permutar" (mnyTitPermutar) da com299 para a INOX Tech (pesCod=191).
+   * Busca o total de "Valor a Permutar" (mnyTitPermutar) da com299 para todos os adiantamentos.
    * Estratégia: list retorna apenas docCod; para cada docCod, GET /com299/{docCod} e soma rows[0].mnyTitPermutar.
    */
   async getValorPermutar(): Promise<number> {
@@ -1807,7 +2096,6 @@ class ConexosService {
         fieldList: ['docCod'],
         filterList: {
           'docVldTipoAdto#EQ': '1',
-          'pesCod#EQ': 191,
           'vldStatus#IN': ['1', '3'],
         },
         pageNumber: page,
@@ -1886,11 +2174,12 @@ class ConexosService {
   }
 
   /**
-   * Lista todos os registros com299 da INOX Tech (pesCod=191) com colunas financeiras.
-   * Retorna array de { docCod, mnyBruto, mnyAcrescimo, mnyDesconto, mnyTitValor, mnyTitPago, mnyTitPermuta, mnyTitAberto, mnyTitPermutar }.
+   * Lista todos os registros com299 de adiantamentos (docVldTipoAdto=1) com colunas financeiras.
+   * Retorna array com priCod para vincular ao processo.
    */
   async getCom299List(): Promise<Array<{
     docCod: number;
+    priCod: number;
     mnyBruto: number;
     mnyAcrescimo: number;
     mnyDesconto: number;
@@ -1899,6 +2188,8 @@ class ConexosService {
     mnyTitPermuta: number;
     mnyTitAberto: number;
     mnyTitPermutar: number;
+    docDtaEmissao: string | null;
+    borDtaFinalizado: string | null;
   }>> {
     await this.ensureSid();
 
@@ -1912,16 +2203,15 @@ class ConexosService {
       'accept': 'application/json, text/plain, */*',
     };
 
-    const docCods: number[] = [];
+    const docEntries: Array<{ docCod: number; priCod: number }> = [];
     let page = 1;
     const pageSize = 100;
 
     while (true) {
       const listBody = {
-        fieldList: ['docCod'],
+        fieldList: ['docCod', 'priCod'],
         filterList: {
           'docVldTipoAdto#EQ': '1',
-          'pesCod#EQ': 191,
           'vldStatus#IN': ['1', '3'],
         },
         pageNumber: page,
@@ -1949,7 +2239,8 @@ class ConexosService {
 
       for (const row of rows) {
         const cod = row.docCod ?? row.doccod;
-        if (cod != null) docCods.push(Number(cod));
+        const pri = row.priCod ?? row.pricod;
+        if (cod != null) docEntries.push({ docCod: Number(cod), priCod: Number(pri ?? 0) });
       }
 
       if (rows.length < pageSize || page * pageSize >= count) break;
@@ -1958,6 +2249,7 @@ class ConexosService {
 
     const result: Array<{
       docCod: number;
+      priCod: number;
       mnyBruto: number;
       mnyAcrescimo: number;
       mnyDesconto: number;
@@ -1966,17 +2258,23 @@ class ConexosService {
       mnyTitPermuta: number;
       mnyTitAberto: number;
       mnyTitPermutar: number;
+      docDtaEmissao: string | null;
+      borDtaFinalizado: string | null;
     }> = [];
 
-    for (const docCod of docCods) {
+    for (const entry of docEntries) {
       try {
-        const getResp = await this.client.get(`/com299/${docCod}`, { headers });
+        const [getResp, baixaDate] = await Promise.all([
+          this.client.get(`/com299/${entry.docCod}`, { headers }),
+          this.getCom309Baixas(entry.docCod),
+        ]);
         const getRows = getResp.data?.rows ?? getResp.data?.data?.rows;
         const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : getResp.data;
         if (!row0) continue;
 
         result.push({
-          docCod,
+          docCod: entry.docCod,
+          priCod: entry.priCod || Number(row0.priCod ?? 0),
           mnyBruto: Number(row0.mnyBruto ?? 0),
           mnyAcrescimo: Number(row0.mnyAcrescimo ?? 0),
           mnyDesconto: Number(row0.mnyDesconto ?? 0),
@@ -1985,16 +2283,22 @@ class ConexosService {
           mnyTitPermuta: Number(row0.mnyTitPermuta ?? 0),
           mnyTitAberto: Number(row0.mnyTitAberto ?? 0),
           mnyTitPermutar: Number(row0.mnyTitPermutar ?? 0),
+          docDtaEmissao: row0.docDtaEmissao ?? null,
+          borDtaFinalizado: baixaDate,
         });
       } catch (err: any) {
         if (err.response?.status === 401) {
           await this.login();
-          const retryResp = await this.client.get(`/com299/${docCod}`, { headers: { ...headers, ...this.getAuthHeaders() } });
+          const [retryResp, baixaDate] = await Promise.all([
+            this.client.get(`/com299/${entry.docCod}`, { headers: { ...headers, ...this.getAuthHeaders() } }),
+            this.getCom309Baixas(entry.docCod),
+          ]);
           const getRows = retryResp.data?.rows ?? retryResp.data?.data?.rows;
           const row0 = Array.isArray(getRows) && getRows.length > 0 ? getRows[0] : retryResp.data;
           if (row0) {
             result.push({
-              docCod,
+              docCod: entry.docCod,
+              priCod: entry.priCod || Number(row0.priCod ?? 0),
               mnyBruto: Number(row0.mnyBruto ?? 0),
               mnyAcrescimo: Number(row0.mnyAcrescimo ?? 0),
               mnyDesconto: Number(row0.mnyDesconto ?? 0),
@@ -2003,6 +2307,8 @@ class ConexosService {
               mnyTitPermuta: Number(row0.mnyTitPermuta ?? 0),
               mnyTitAberto: Number(row0.mnyTitAberto ?? 0),
               mnyTitPermutar: Number(row0.mnyTitPermutar ?? 0),
+              docDtaEmissao: row0.docDtaEmissao ?? null,
+              borDtaFinalizado: baixaDate,
             });
           }
         }
@@ -2010,6 +2316,52 @@ class ConexosService {
     }
 
     return result;
+  }
+
+  /**
+   * Busca a data de finalização (borDtaFinalizado) das baixas de um documento com299.
+   * Endpoint: POST /com309/baixas/list/{docCod}/1/0
+   * Retorna a data da última baixa finalizada, ou null se não houver.
+   */
+  async getCom309Baixas(docCod: number): Promise<string | null> {
+    await this.ensureSid();
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const body = {
+      fieldList: [],
+      filterList: { 'borVldFinalizado#IN': [1] },
+      pageNumber: 1,
+      pageSize: 100,
+      orderList: { orderList: [{ propertyName: 'borCod', order: 'asc' }] },
+    };
+
+    try {
+      const resp = await this.client.post(`/com309/baixas/list/${docCod}/1/0`, body, { headers });
+      const rows = resp.data?.rows || resp.data?.data?.rows || [];
+      if (rows.length === 0) return null;
+      // Última baixa finalizada (ordenado por borCod asc → último = mais recente)
+      const lastRow = rows[rows.length - 1];
+      return lastRow?.borDtaFinalizado ?? null;
+    } catch (err: any) {
+      if (err.response?.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(`/com309/baixas/list/${docCod}/1/0`, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        const rows = retryResp.data?.rows || retryResp.data?.data?.rows || [];
+        if (rows.length === 0) return null;
+        const lastRow = rows[rows.length - 1];
+        return lastRow?.borDtaFinalizado ?? null;
+      }
+      console.error(`[com309] Erro ao buscar baixas para docCod=${docCod}:`, err.message);
+      return null;
+    }
   }
 
   async submitExpense(data: {

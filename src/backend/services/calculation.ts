@@ -10,11 +10,13 @@ import { calculationInputHash, logEvent, boxLog } from '../utils/index.js';
 export async function orchestrateCalculation(input: CalculationInput): Promise<CalculationResult> {
   boxLog('Service: orchestrateCalculation Input', input);
 
-  // 1. Buscar dados do processo no Conexos
-  const process = await conexosService.getProcessById(input.processId);
-  const cdiList = await conexosService.getCDI();
-  const parcelas = await conexosService.getParcelsByProcessId(input.processId);
-  const despesas = await conexosService.getDespesasByProcessId(input.processId);
+  // 1. Buscar dados do processo no Conexos (em paralelo — são independentes)
+  const [process, cdiList, parcelas, despesas] = await Promise.all([
+    conexosService.getProcessById(input.processId),
+    conexosService.getCDI(),
+    conexosService.getParcelsByProcessId(input.processId),
+    conexosService.getDespesasByProcessId(input.processId),
+  ]);
 
   boxLog('Conexos Data Fetched', {
     processNumber: process?.imcNumNumero,

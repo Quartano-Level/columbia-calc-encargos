@@ -58,23 +58,35 @@ router.get('/:id', async (req, res) => {
 // POST /calculations/:id/submit
 router.post('/:id/submit', async (req, res) => {
   try {
-    // Buscar cálculo (aceita id uuid ou processo_id)
-    const { data, error } = await getCalculationById(req.params.id);
-    if (error || !data) {
-      return res.status(404).json({ error: 'Cálculo não encontrado', details: error?.message || `Nenhum cálculo com id/processo '${req.params.id}'` });
+    const { data } = await getCalculationById(req.params.id);
+
+    let processId: string;
+    let emissionDate: string;
+    let totalInterest: number;
+    let taxaDolarFiscal: number;
+    let calculationId: string | undefined;
+
+    if (data) {
+      // Caminho 1: cálculo salvo no Supabase
+      const row = data as any;
+      const payload = row.payload || {};
+      processId = row.processo_id || payload.processId || payload.processoId;
+      emissionDate = payload.emissionDate || row.calculated_at || new Date().toISOString();
+      totalInterest = payload.totalInterest || row.total_encargos || 0;
+      taxaDolarFiscal = payload.cambio?.taxaDolarFiscal || 1;
+      calculationId = data.id;
+    } else if (req.body && req.body.totalInterest) {
+      // Caminho 2: dados enviados diretamente pelo frontend (calculador)
+      processId = req.body.processId || req.params.id;
+      emissionDate = req.body.emissionDate || new Date().toISOString();
+      totalInterest = req.body.totalInterest;
+      taxaDolarFiscal = req.body.taxaDolarFiscal || 1;
+    } else {
+      return res.status(404).json({
+        error: 'Cálculo não encontrado',
+        details: `Nenhum cálculo com id/processo '${req.params.id}' e nenhum dado enviado no body`
+      });
     }
-    // 2. Chamar Conexos para inserir a despesa
-    const row = data as any;
-    const payload = row.payload || {};
-
-    const processId = row.processo_id || payload.processId || payload.processoId;
-    const emissionDate = payload.emissionDate || row.calculated_at || new Date().toISOString();
-
-    // Priorizar totalInterest do payload, senao usar total_encargos da coluna
-    const totalInterest = payload.totalInterest || row.total_encargos || 0;
-
-    // Taxa cambial está no objeto cambio do payload
-    const taxaDolarFiscal = payload.cambio?.taxaDolarFiscal || 1;
 
     boxLog('Submitting to Conexos', { processId, emissionDate, totalInterest, taxaDolarFiscal });
 
@@ -85,13 +97,9 @@ router.post('/:id/submit', async (req, res) => {
       taxaDolarFiscal
     });
 
-    // 3. Registrar submissão no Supabase (usar id real do cálculo)
-    logEvent('calculation_submitted', { calculationId: data.id });
+    logEvent('calculation_submitted', { calculationId: calculationId || processId });
 
-    // Opcional: Atualizar status do cálculo para 'submitted'
-    // await updateCalculationStatus(data.id, 'submitted');
-
-    res.json({ status: 'submitted', calculationId: data.id });
+    res.json({ status: 'submitted', calculationId: calculationId || processId });
   } catch (err: any) {
     boxLog('Submission Error', { error: err.message, data: err.response?.data });
     res.status(500).json({ error: 'Erro ao submeter cálculo', details: err.message });

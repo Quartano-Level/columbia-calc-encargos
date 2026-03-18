@@ -1,26 +1,126 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Process, CalculationResult, EnrichedContractData, CalculatorFormState } from "@/lib/types";
+import { Process, EnrichedContractData, CalculatorFormState } from "@/lib/types";
 import {
 	fetchProcess,
 	fetchContractsByProcess,
 	fetchEnrichedContractData,
 	fetchBCBLatestCDI,
 	fetchBCBPtaxVenda,
-	calculateCharges,
 	submitToConexos,
+	fetchExpensesByProcess,
 } from "@/lib/api";
-import { calcularEncargos, calcularVariacaoCambial } from "@/lib/utils";
+import { calcularEncargos } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ProtectedRoute } from "@/components/protected-route";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, CheckCircle2, FileText, DollarSign } from "lucide-react";
+import { NumericFormat } from "react-number-format";
+import { useToast } from "@/hooks/use-toast";
+
+type TaxaPeriod = 'anual' | 'mensal' | 'diario';
+
+interface CalculatorTab {
+	id: string;
+	type: 'contract' | 'expense';
+	label: string;
+	sourceData: any;
+	formState: CalculatorFormState;
+	calculated: boolean;
+	enrichedContract?: EnrichedContractData | null;
+	taxaPeriod: TaxaPeriod;
+	taxaInputValue: number | null;
+}
+
+const defaultFormState: CalculatorFormState = {
+	refExterna: '',
+	nomeCliente: '',
+	incoterm: '',
+	moedaNegociada: '',
+	valorMoedaNegociada: 0,
+	valorMoedaNacional: 0,
+	dataFechamento: '',
+	dataConversao: '',
+	dataFaturamento: '',
+	prazoEmDias: 0,
+	vencimentoCliente: '',
+	taxaFechamento: null,
+	taxaPtaxDI: null,
+	taxaSpotDoDia: null,
+	taxaSpotNegociada: null,
+	taxaFutura: null,
+	cdiAoAno: null,
+	spread: 0,
+	encargosCalculados: 0,
+};
+
+const formatBRL = (val: number) =>
+	new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+
+/** Converte taxa de um período para taxa anual */
+function taxaParaAnual(value: number, period: TaxaPeriod): number {
+	if (!value) return 0;
+	if (period === 'anual') return value;
+	if (period === 'mensal') return (Math.pow(1 + value / 100, 12) - 1) * 100;
+	// diario: base 252 dias úteis
+	return (Math.pow(1 + value / 100, 252) - 1) * 100;
+}
+
+/** Converte taxa anual para o período desejado */
+function taxaDeAnual(annualRate: number, period: TaxaPeriod): number {
+	if (!annualRate) return 0;
+	if (period === 'anual') return annualRate;
+	if (period === 'mensal') return (Math.pow(1 + annualRate / 100, 1 / 12) - 1) * 100;
+	return (Math.pow(1 + annualRate / 100, 1 / 252) - 1) * 100;
+}
+
+const PERIOD_LABELS: Record<TaxaPeriod, string> = {
+	anual: '% ao ano',
+	mensal: '% ao mês',
+	diario: '% ao dia',
+};
+
+const PERIOD_SHORT: Record<TaxaPeriod, string> = {
+	anual: 'a.a.',
+	mensal: 'a.m.',
+	diario: 'a.d.',
+};
+
+function toIsoDate(value: any): string {
+	if (!value) return '';
+	try {
+		const d = typeof value === 'number' ? new Date(value) : new Date(String(value));
+		if (Number.isNaN(d.getTime())) return '';
+		return d.toISOString().split('T')[0];
+	} catch {
+		return '';
+	}
+}
+
+function getTabBaseDate(tab: CalculatorTab): string {
+	if (tab.type === 'contract') return tab.formState.dataFechamento || '';
+	return tab.formState.dataConversao || '';
+}
+
+function formatConexosBillingTerm(days: number | null | undefined): string {
+	if (days == null) return 'null (à vista)';
+	if (Number(days) === 0) return '0 (à vista)';
+	if (Number.isFinite(Number(days)) && Number(days) > 0) return `${Number(days)} dia(s)`;
+	return 'não informado';
+}
+
+/** Soma CDI + spread no mesmo período e converte resultado para anual */
+function taxaEfetivaAnual(cdiAnual: number, spread: number, period: TaxaPeriod): number {
+	const cdiNoPeriodo = taxaDeAnual(cdiAnual, period);
+	return taxaParaAnual(cdiNoPeriodo + spread, period);
+}
 
 export default function ProcessCalculatorPage() {
 	const params = useParams();
@@ -28,305 +128,835 @@ export default function ProcessCalculatorPage() {
 	const searchParams = useSearchParams();
 	const processId = params.id as string;
 	const contractIdParam = searchParams.get('contractId');
+	const { toast } = useToast();
 
-	// State
 	const [process, setProcess] = useState<Process | null>(null);
-	const [contracts, setContracts] = useState<any[]>([]);
-	const [selectedContract, setSelectedContract] = useState<EnrichedContractData | null>(null);
 	const [loading, setLoading] = useState(true);
-	const [calculating, setCalculating] = useState(false);
 	const [submitting, setSubmitting] = useState(false);
 	const [loadingBCBCDI, setLoadingBCBCDI] = useState(false);
-	const [error, setError] = useState<string | null>(null);
-	const [result, setResult] = useState<CalculationResult | null>(null);
+	const [showSpread, setShowSpread] = useState(false);
 
-	// Form state seguindo estrutura de 3 decks
-	const [formState, setFormState] = useState<CalculatorFormState>({
-		// Deck 1: Process
-		refExterna: '',
-		nomeCliente: '',
-		incoterm: '',
-		moedaNegociada: '',
-		valorMoedaNegociada: 0,
-		valorMoedaNacional: 0,
+	const [tabs, setTabs] = useState<CalculatorTab[]>([]);
+	const [activeTabId, setActiveTabId] = useState<string>('');
 
-		// Deck 2: Contract
-		dataFechamento: '',
-		dataFaturamento: '',
-		prazoEmDias: 0,
-		vencimentoCliente: '',
+	const activeTab = tabs.find(t => t.id === activeTabId);
 
-		// Deck 3: Rates
-		taxaFechamento: null,
-		taxaPtaxDI: null,
-		taxaSpotDoDia: null,
-		taxaSpotNegociada: null,
-		taxaFutura: null,
+	const showError = useCallback((message: string) => {
+		toast({ title: 'Erro', description: message, variant: 'destructive' });
+	}, [toast]);
 
-		// Calculation
-		cdiAoAno: null,
-		encargosCalculados: 0,
-	});
+	const showSuccess = useCallback((message: string) => {
+		toast({ title: 'Sucesso', description: message });
+	}, [toast]);
 
-	// Load process and contracts on mount
+	const updateTabFormState = useCallback((tabId: string, updater: (prev: CalculatorFormState) => CalculatorFormState) => {
+		setTabs(prev => prev.map(t =>
+			t.id === tabId ? { ...t, formState: updater(t.formState) } : t
+		));
+	}, []);
+
+	const updateTab = useCallback((tabId: string, updates: Partial<Omit<CalculatorTab, 'id'>>) => {
+		setTabs(prev => prev.map(t => t.id === tabId ? { ...t, ...updates } : t));
+	}, []);
+
+	// Calcula Data Vencimento com base na data de fechamento/conversão + prazo
+	useEffect(() => {
+		if (!activeTab) return;
+		const fs = activeTab.formState;
+		const baseDate = getTabBaseDate(activeTab);
+		if (baseDate && fs.prazoEmDias > 0) {
+			const d = new Date(baseDate);
+			d.setDate(d.getDate() + fs.prazoEmDias);
+			const nextDue = d.toISOString().split('T')[0];
+			if (nextDue !== fs.vencimentoCliente) {
+				updateTabFormState(activeTab.id, prev => ({
+					...prev,
+					vencimentoCliente: nextDue
+				}));
+			}
+		} else if (fs.vencimentoCliente) {
+			updateTabFormState(activeTab.id, prev => ({ ...prev, vencimentoCliente: '' }));
+		}
+	}, [activeTab?.id, activeTab?.type, activeTab?.formState.dataFechamento, activeTab?.formState.dataConversao, activeTab?.formState.prazoEmDias]);
+
 	useEffect(() => {
 		loadProcessData();
 	}, [processId]);
 
-	// Calculate "Vencimento Cliente" when dataFaturamento or prazoEmDias changes
-	useEffect(() => {
-		if (formState.dataFaturamento && formState.prazoEmDias > 0) {
-			const dataFat = new Date(formState.dataFaturamento);
-			dataFat.setDate(dataFat.getDate() + formState.prazoEmDias);
-			setFormState(prev => ({
-				...prev,
-				vencimentoCliente: dataFat.toISOString().split('T')[0]
-			}));
-		} else {
-			setFormState(prev => ({ ...prev, vencimentoCliente: '' }));
-		}
-	}, [formState.dataFaturamento, formState.prazoEmDias]);
-
 	async function loadProcessData() {
 		try {
 			setLoading(true);
-			setError(null);
 
 			const data = await fetchProcess(processId);
 			const processData = data.process;
 			setProcess(processData);
+			const rawBillingTermDays = processData?.billingTermDays;
+			const defaultPrazoEmDias = rawBillingTermDays == null
+				? 0
+				: (Number.isFinite(Number(rawBillingTermDays)) ? Number(rawBillingTermDays) : 0);
 
-			// Load contracts
 			const priCod = processData?.priCod || parseInt(processId, 10);
-			if (!isNaN(priCod)) {
-				const contractsData = await fetchContractsByProcess(priCod);
-				setContracts(contractsData || []);
+			if (isNaN(priCod)) return;
 
-				// Auto-select contract if provided in URL or select first
-				let contractToLoad = null;
-				if (contractIdParam && contractsData.length > 0) {
-					contractToLoad = contractsData.find((c: any) => String(c.imcCod) === contractIdParam);
-				}
-				if (!contractToLoad && contractsData.length > 0) {
-					contractToLoad = contractsData[0];
-				}
+			const [contractsData, expensesData] = await Promise.all([
+				fetchContractsByProcess(priCod),
+				fetchExpensesByProcess(priCod),
+			]);
 
-				if (contractToLoad) {
-					// Passar processData diretamente em vez de usar o state
-					await loadEnrichedContract(priCod, contractToLoad.imcCod, processData);
-				}
+			const raw = (processData as any)?.raw || processData;
+			const refExterna = processData?.priEspRefcliente || raw?.priEspRefcliente || processData?.processNumber || '';
+			const nomeCliente = processData?.dpeNomPessoa || raw?.dpeNomPessoa || processData?.clientName || '';
+			const incoterm = processData?.incoterm || raw?.incoterm || raw?.incEspSigla || '';
+
+			const contractTabs: CalculatorTab[] = await Promise.all(
+				(contractsData || []).map(async (contract: any) => {
+					const tabId = `contract-${contract.imcCod}`;
+					let enriched: EnrichedContractData | null = null;
+					try {
+						enriched = await fetchEnrichedContractData(priCod, contract.imcCod);
+					} catch (err) {
+						console.warn(`Failed to enrich contract ${contract.imcCod}:`, err);
+					}
+
+					const formState = enriched
+						? await buildContractFormState(enriched, { refExterna, nomeCliente, incoterm }, defaultPrazoEmDias)
+						: { ...defaultFormState, refExterna, nomeCliente, incoterm, prazoEmDias: defaultPrazoEmDias };
+
+					return {
+						id: tabId,
+						type: 'contract' as const,
+						label: `Contrato ${contract.imcCod}`,
+						sourceData: contract,
+						formState,
+						calculated: false,
+						enrichedContract: enriched,
+						taxaPeriod: 'anual' as TaxaPeriod,
+						taxaInputValue: null,
+					};
+				})
+			);
+
+			// Agrupa despesas por encargo (impDesNome) para cálculo consolidado por tipo de encargo
+			const groupedExpenses = new Map<string, any[]>();
+			(expensesData || []).forEach((exp: any) => {
+				const groupKey = (exp.impDesNome || exp.ctpDesNome || 'Outras Despesas').trim();
+				const current = groupedExpenses.get(groupKey) || [];
+				current.push(exp);
+				groupedExpenses.set(groupKey, current);
+			});
+
+			const expenseTabs: CalculatorTab[] = Array.from(groupedExpenses.entries()).map(([groupName, items], i) => {
+				const tabId = `expense-group-${i}`;
+				const moeda = items.find((e: any) => e.moeEspNome)?.moeEspNome || 'BRL';
+				const valorMneg = items.reduce((sum: number, e: any) => sum + (Number(e.pidMnyValorMneg || e.pidMnyValor || 0) || 0), 0);
+				const valorMn = items.reduce((sum: number, e: any) => sum + (Number(e.pidMnyValormn || 0) || 0), 0);
+				const baseValue = valorMn > 0 ? valorMn : valorMneg;
+				const dataConversao = toIsoDate(items.find((e: any) => e.pidDtaTaxas)?.pidDtaTaxas);
+
+				return {
+					id: tabId,
+					type: 'expense' as const,
+					label: groupName,
+					sourceData: {
+						encargo: groupName,
+						items,
+						projectAccounts: Array.from(new Set(items.map((e: any) => e.ctpDesNome).filter(Boolean))),
+					},
+					formState: {
+						...defaultFormState,
+						refExterna,
+						nomeCliente,
+						incoterm,
+						moedaNegociada: moeda,
+						valorMoedaNegociada: valorMneg,
+						valorMoedaNacional: baseValue,
+						dataConversao,
+						prazoEmDias: defaultPrazoEmDias,
+					},
+					calculated: false,
+					taxaPeriod: 'anual' as TaxaPeriod,
+					taxaInputValue: null,
+				};
+			});
+
+			const allTabs = [...contractTabs, ...expenseTabs];
+			setTabs(allTabs);
+
+			if (contractIdParam && allTabs.length > 0) {
+				const match = allTabs.find(t => t.id === `contract-${contractIdParam}`);
+				setActiveTabId(match?.id || allTabs[0].id);
+			} else if (allTabs.length > 0) {
+				setActiveTabId(allTabs[0].id);
 			}
 		} catch (err: any) {
 			console.error('Error loading process:', err);
-			setError(err.message || 'Erro ao carregar processo');
+			showError(err.message || 'Erro ao carregar processo');
 		} finally {
 			setLoading(false);
 		}
 	}
 
-	async function loadEnrichedContract(priCod: number, imcCod: number, processData: any) {
-		try {
-			const enriched = await fetchEnrichedContractData(priCod, imcCod);
-			setSelectedContract(enriched);
-
-			// Auto-populate form from contract, passando processData diretamente
-			if (enriched && processData) {
-				await autoPopulateFromContract(enriched, processData);
-			}
-		} catch (err: any) {
-			console.error('Error loading enriched contract:', err);
-			setError('Erro ao carregar dados do contrato');
-		}
-	}
-
-	async function autoPopulateFromContract(contract: EnrichedContractData, proc: any) {
-		// Debug: log dos dados recebidos
-		console.log('[DEBUG] Process data:', proc);
-		console.log('[DEBUG] Contract data:', contract);
-
-		// Deck 1: Process Information (USAR DADOS DO PROCESSO, NÃO DO CONTRATO)
-		// Tentar pegar do objeto normalizado primeiro, depois do raw
-		const raw = proc.raw || proc;
-
-		const refExterna = proc.priEspRefcliente || raw.priEspRefcliente || proc.processNumber || '';
-		const nomeCliente = proc.dpeNomPessoa || raw.dpeNomPessoa || proc.clientName || '';
-		const incoterm = proc.incoterm || raw.incoterm || raw.incEspSigla || '';
-
-		// Moeda e Valores: usar dados do CONTRATO (mesmos campos da planilha/PDF)
-		const moedaNegociada = contract.moeEspNome || proc.currency || raw.moeEspNome || 'USD';
+	async function buildContractFormState(
+		contract: EnrichedContractData,
+		processInfo: { refExterna: string; nomeCliente: string; incoterm: string },
+		defaultPrazoEmDias = 0
+	): Promise<CalculatorFormState> {
+		const moedaNegociada = contract.moeEspNome || 'USD';
 		const valorMoedaNegociada = Number(contract.vlrMneg || 0);
 		const valorMoedaNacional = Number(contract.vlrTotalNac || 0);
-
-		// Deck 2: Contract Information
 		const dataFechamento = contract.imcDtaFechamento
 			? new Date(contract.imcDtaFechamento).toISOString().split('T')[0]
 			: '';
 		const dataFaturamento = contract.dataFaturamento
 			? new Date(contract.dataFaturamento).toISOString().split('T')[0]
 			: '';
-
-		// Deck 3: Contract Rates
 		const taxaFechamento = contract.imcFltTxFec || null;
 		const taxaPtaxDI = contract.taxaPtaxDI || null;
 
-		// Fetch BCB data if A Prazo
 		let taxaSpotDoDia: number | null = null;
 		if (contract.isAPrazo && dataFechamento) {
 			try {
 				taxaSpotDoDia = await fetchBCBPtaxVenda(dataFechamento);
-			} catch (err) {
-				console.warn('Failed to fetch Ptax venda from BCB:', err);
-			}
+			} catch { /* silencioso */ }
 		}
 
-		const newFormState = {
-			refExterna,
-			nomeCliente,
-			incoterm,
+		const taxaSpotNegociada = contract.isAPrazo && valorMoedaNegociada > 0 && valorMoedaNacional > 0
+			? valorMoedaNacional / valorMoedaNegociada
+			: null;
+
+		return {
+			...processInfo,
 			moedaNegociada,
 			valorMoedaNegociada,
 			valorMoedaNacional,
 			dataFechamento,
+			dataConversao: '',
 			dataFaturamento,
-			prazoEmDias: 0, // User must input
+			prazoEmDias: defaultPrazoEmDias,
 			vencimentoCliente: '',
 			taxaFechamento,
 			taxaPtaxDI,
 			taxaSpotDoDia,
-			taxaSpotNegociada: null, // User must input if A Prazo
-			taxaFutura: null, // User must input if A Prazo
+			taxaSpotNegociada,
+			taxaFutura: null,
 			cdiAoAno: null,
+			spread: 0,
 			encargosCalculados: 0,
 		};
-
-		console.log('[DEBUG] Form state populated:', newFormState);
-		setFormState(newFormState);
 	}
 
 	async function handleFetchCDI() {
+		if (!activeTab) return;
 		try {
 			setLoadingBCBCDI(true);
 			const latestCDI = await fetchBCBLatestCDI();
 			if (latestCDI) {
-				setFormState(prev => ({
-					...prev,
-					cdiAoAno: latestCDI.annualRate,
-					cdiMensal: latestCDI.monthlyRate,
-				}));
+				const annualRate = latestCDI.annualRate;
+				const displayValue = taxaDeAnual(annualRate, activeTab.taxaPeriod);
+				updateTab(activeTab.id, {
+					taxaInputValue: displayValue,
+					formState: {
+						...activeTab.formState,
+						cdiAoAno: annualRate,
+						cdiMensal: latestCDI.monthlyRate,
+					},
+				});
+				setShowSpread(true);
 			} else {
-				setError('Erro ao buscar CDI do BCB');
+				showError('Erro ao buscar CDI do BCB');
 			}
-		} catch (err: any) {
-			console.error('Error fetching CDI:', err);
-			setError('Erro ao buscar CDI do BCB');
+		} catch {
+			showError('Erro ao buscar CDI do BCB');
 		} finally {
 			setLoadingBCBCDI(false);
 		}
 	}
 
+	function handleChangePeriod(tab: CalculatorTab, newPeriod: TaxaPeriod) {
+		const currentAnual = tab.formState.cdiAoAno || 0;
+		const newDisplayValue = currentAnual > 0 ? taxaDeAnual(currentAnual, newPeriod) : tab.taxaInputValue;
+		updateTab(tab.id, { taxaPeriod: newPeriod, taxaInputValue: newDisplayValue ?? null });
+	}
+
+	function handleTaxaInputChange(tab: CalculatorTab, value: number | null) {
+		const anual = value ? taxaParaAnual(value, tab.taxaPeriod) : null;
+		updateTab(tab.id, {
+			taxaInputValue: value,
+			formState: { ...tab.formState, cdiAoAno: anual },
+		});
+	}
+
 	function handleCalculate() {
-		if (!formState.cdiAoAno || formState.prazoEmDias <= 0 || formState.valorMoedaNacional <= 0) {
-			setError('Preencha todos os campos obrigatórios: CDI ao Ano, Prazo em Dias e Valor Moeda Nacional');
+		if (!activeTab) return;
+		const fs = activeTab.formState;
+
+		// Base para cálculo: prioriza valorMoedaNacional, fallback para valorMoedaNegociada
+		const baseCalculo = fs.valorMoedaNacional > 0 ? fs.valorMoedaNacional : fs.valorMoedaNegociada;
+
+		if (!fs.cdiAoAno || fs.prazoEmDias <= 0 || baseCalculo <= 0) {
+			showError('Preencha os campos obrigatórios: Taxa aplicada, Prazo em dias e Valor base para cálculo.');
 			return;
 		}
 
-		const encargo = calcularEncargos(
-			formState.valorMoedaNacional,
-			formState.cdiAoAno,
-			formState.prazoEmDias,
-		);
+		const taxaEfetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, activeTab.taxaPeriod);
+		const encargo = calcularEncargos(baseCalculo, taxaEfetiva, fs.prazoEmDias);
 
-		// Variação Cambial: calculada quando Ptax DI e Taxa Fechamento estão disponíveis
-		let variacaoCambial: number | undefined;
-		if (formState.taxaPtaxDI && formState.taxaFechamento && formState.valorMoedaNegociada > 0) {
-			variacaoCambial = calcularVariacaoCambial(
-				formState.valorMoedaNegociada,
-				formState.taxaPtaxDI,
-				formState.taxaFechamento,
-			);
-		}
-
-		setFormState(prev => ({
-			...prev,
-			encargosCalculados: encargo,
-			variacaoCambial,
-		}));
-
-		setError(null);
+		updateTab(activeTab.id, {
+			calculated: true,
+			formState: { ...fs, encargosCalculados: encargo, valorMoedaNacional: baseCalculo },
+		});
 	}
 
 	async function handleSubmit() {
-		if (!formState.encargosCalculados || formState.encargosCalculados <= 0) {
-			setError('Calcule os encargos antes de enviar');
-			return;
-		}
-
-		if (!process) {
-			setError('Processo não carregado');
+		if (!process) return;
+		const calculatedTabs = tabs.filter(t => t.formState.encargosCalculados > 0);
+		if (calculatedTabs.length === 0) {
+			showError('Calcule os encargos de pelo menos um item antes de enviar.');
 			return;
 		}
 
 		try {
 			setSubmitting(true);
-			setError(null);
+			const totalInterest = calculatedTabs.reduce((sum, t) => sum + (t.formState.encargosCalculados || 0), 0);
+			const baseDates = calculatedTabs
+				.map(t => getTabBaseDate(t))
+				.filter(Boolean)
+				.sort();
 
-			// Prepare data for submission
-			const dataToSubmit: CalculationResult & { clientName: string } = {
-				processId: processId,
-				emissionDate: formState.dataFechamento || new Date().toISOString().split('T')[0],
-				totalDisburse: formState.valorMoedaNacional,
-				totalInterest: formState.encargosCalculados,
-				totalCharges: formState.valorMoedaNacional + formState.encargosCalculados,
-				payments: [],
-				summary: {
-					calculationDate: new Date().toISOString(),
-					taxaCDI: formState.cdiAoAno || 0,
-					taxaConexos: formState.taxaFechamento || 0,
-					effectiveRate: 0,
-				},
-				clientName: formState.nomeCliente,
-				movimentos: [],
-				...(formState.variacaoCambial !== undefined && {
-					despesas: [{ tipo: 'cambial', descricao: 'Variação Cambial', valor: formState.variacaoCambial }],
-				}),
-			};
-
-			await submitToConexos(processId, dataToSubmit);
-			alert('Encargos financeiros enviados ao Conexos com sucesso!');
-
-			// Reload process data to show updated expenses
+			await submitToConexos(processId, {
+				processId,
+				emissionDate: baseDates[0] || new Date().toISOString().split('T')[0],
+				totalInterest,
+				taxaDolarFiscal: 1,
+			});
+			showSuccess('Encargos financeiros enviados ao Conexos com sucesso!');
 			await loadProcessData();
 		} catch (err: any) {
-			console.error('Error submitting to Conexos:', err);
-			setError('Erro ao enviar para o Conexos: ' + (err.message || 'Erro desconhecido'));
+			showError('Erro ao enviar para o Conexos: ' + (err.message || 'Erro desconhecido'));
 		} finally {
 			setSubmitting(false);
 		}
 	}
 
-	function handlePrint() {
-		window.print();
+	// ─── Render helpers ───────────────────────────────────────────────────────
+
+	function renderInfoField(label: string, value: string) {
+		return (
+			<div>
+				<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">{label}</Label>
+				<p className="mt-1 text-sm font-medium text-gray-900">{value || '—'}</p>
+			</div>
+		);
 	}
+
+	function renderContractForm(tab: CalculatorTab) {
+		const fs = tab.formState;
+		const enriched = tab.enrichedContract;
+		const isAVista = enriched?.isAVista ?? false;
+
+		return (
+			<div className="space-y-4">
+				{/* Processo + Contrato em grid horizontal */}
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Processo</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-4">
+						<div className="grid grid-cols-4 gap-x-6 gap-y-4">
+							{renderInfoField('Referência', fs.refExterna)}
+							{renderInfoField('Cliente', fs.nomeCliente)}
+							{renderInfoField('Incoterm', fs.incoterm)}
+							{renderInfoField('Moeda', fs.moedaNegociada)}
+							{renderInfoField('Prazo Conexos (dupNumDiasVcto)', formatConexosBillingTerm(process?.billingTermDays))}
+						</div>
+					</CardContent>
+				</Card>
+
+				<div className="grid grid-cols-2 gap-4">
+					{/* Contrato */}
+					<Card>
+						<CardHeader className="bg-gray-50 border-b py-3">
+							<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Contrato de Câmbio</CardTitle>
+						</CardHeader>
+						<CardContent className="pt-4 space-y-4">
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Fechamento</Label>
+								<Input type="date" value={fs.dataFechamento} disabled className="bg-gray-50 mt-1" />
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
+								<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
+								<Input
+									type="number"
+									value={fs.prazoEmDias || ''}
+									onChange={(e) => updateTabFormState(tab.id, prev => ({
+										...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
+									}))}
+									className="border-blue-400 mt-1"
+									placeholder="Ex: 30"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Contrato ({fs.moedaNegociada})</Label>
+								<NumericFormat
+									customInput={Input}
+									thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false}
+									value={fs.valorMoedaNegociada || ''}
+									onValueChange={(values) => {
+										const val = values.floatValue || 0;
+										const taxa = (fs.taxaFechamento ?? fs.taxaSpotNegociada ?? fs.taxaFutura) ?? 0;
+										updateTabFormState(tab.id, prev => ({
+											...prev,
+											valorMoedaNegociada: val,
+											valorMoedaNacional: taxa > 0 && val > 0 ? val * taxa : prev.valorMoedaNacional
+										}));
+									}}
+									className="border-blue-400 mt-1" placeholder="Ex: 50.000,00"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Nacional (BRL)</Label>
+								<Input
+									value={new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(fs.valorMoedaNacional)}
+									disabled className="bg-gray-50 font-semibold mt-1"
+								/>
+							</div>
+						</CardContent>
+					</Card>
+
+					{/* Taxas */}
+					<Card>
+						<CardHeader className="bg-gray-50 border-b py-3">
+							<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Taxas do Contrato</CardTitle>
+						</CardHeader>
+						<CardContent className="pt-4 space-y-4">
+							{isAVista ? (
+								<div>
+									<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa Fechamento (câmbio)</Label>
+									<Input
+										type="number" step="0.0001"
+										value={fs.taxaFechamento ?? ''}
+										disabled className="bg-gray-50 font-semibold mt-1"
+									/>
+								</div>
+							) : (
+								<>
+									<div>
+										<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa Ptax da D.I (Conexos)</Label>
+										<Input value={fs.taxaPtaxDI?.toFixed(4) || '0.0000'} disabled className="bg-gray-50 mt-1" />
+										{!fs.taxaPtaxDI && <p className="text-xs text-amber-600 mt-1">⚠ Taxa Ptax D.I não disponível</p>}
+									</div>
+									<div>
+										<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa Spot do dia (BCB)</Label>
+										<div className="flex gap-2 mt-1">
+											<Input value={fs.taxaSpotDoDia?.toFixed(4) || '0.0000'} disabled className="bg-gray-50" />
+											<Button variant="outline" size="sm" onClick={async () => {
+												if (fs.dataFechamento) {
+													const rate = await fetchBCBPtaxVenda(fs.dataFechamento);
+													if (rate) updateTabFormState(tab.id, prev => ({ ...prev, taxaSpotDoDia: rate }));
+												}
+											}}>Atualizar</Button>
+										</div>
+									</div>
+									<div>
+										<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa Spot Negociada *</Label>
+										<Input
+											type="number" step="0.0001"
+											value={fs.taxaSpotNegociada || ''}
+											onChange={(e) => {
+												const taxa = parseFloat(e.target.value) || null;
+												const valorUSD = fs.valorMoedaNegociada ?? 0;
+												updateTabFormState(tab.id, prev => ({
+													...prev, taxaSpotNegociada: taxa,
+													valorMoedaNacional: taxa && taxa > 0 && valorUSD > 0 ? valorUSD * taxa : prev.valorMoedaNacional
+												}));
+											}}
+											className="border-blue-400 mt-1" placeholder="Ex: 5.5000"
+										/>
+									</div>
+									<div>
+										<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa Futura *</Label>
+										<Input
+											type="number" step="0.0001"
+											value={fs.taxaFutura || ''}
+											onChange={(e) => {
+												const taxa = parseFloat(e.target.value) || null;
+												const valorUSD = fs.valorMoedaNegociada ?? 0;
+												updateTabFormState(tab.id, prev => ({
+													...prev, taxaFutura: taxa,
+													valorMoedaNacional: taxa && taxa > 0 && valorUSD > 0 ? valorUSD * taxa : prev.valorMoedaNacional
+												}));
+											}}
+											className="border-blue-400 mt-1" placeholder="Ex: 5.6000"
+										/>
+									</div>
+								</>
+							)}
+						</CardContent>
+					</Card>
+				</div>
+
+				{renderCalculationSection(tab)}
+			</div>
+		);
+	}
+
+	function renderExpenseForm(tab: CalculatorTab) {
+		const fs = tab.formState;
+		const expGroup = tab.sourceData;
+		const items = Array.isArray(expGroup?.items) ? expGroup.items : [];
+		const projectAccounts = Array.isArray(expGroup?.projectAccounts) ? expGroup.projectAccounts : [];
+		const activeItems = items.filter((e: any) => String(e.pidVldStatus) === '1').length;
+		const statusGroup = activeItems > 0 ? 'Ativa' : 'Inativa';
+
+		return (
+			<div className="space-y-4">
+				{/* Info compacta */}
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Despesa</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-4">
+						<div className="grid grid-cols-3 gap-x-6 gap-y-4">
+							{renderInfoField('Referência', fs.refExterna)}
+							{renderInfoField('Cliente', fs.nomeCliente)}
+							{renderInfoField('Conta(s) de Projeto', projectAccounts.length > 0 ? projectAccounts.join(', ') : '—')}
+							{renderInfoField('Encargo', expGroup.encargo || tab.label || '—')}
+							{renderInfoField('Moeda', fs.moedaNegociada)}
+							{renderInfoField('Situação', statusGroup)}
+							{renderInfoField('Prazo Conexos (dupNumDiasVcto)', formatConexosBillingTerm(process?.billingTermDays))}
+						</div>
+					</CardContent>
+				</Card>
+
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Detalhamento do Grupo</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-4">
+						<details className="rounded border border-gray-200 p-3">
+							<summary className="cursor-pointer text-sm font-medium text-gray-700">
+								Ver {items.length} lançamento(s) que compõem "{expGroup.encargo || tab.label}"
+							</summary>
+							<div className="mt-3 overflow-x-auto">
+								<table className="w-full text-xs">
+									<thead>
+										<tr className="border-b border-gray-100">
+											<th className="text-left py-2">Conta Projeto</th>
+											<th className="text-left py-2">Encargo</th>
+											<th className="text-left py-2">Data Conversão</th>
+											<th className="text-right py-2">Valor (BRL)</th>
+										</tr>
+									</thead>
+									<tbody>
+										{items.map((item: any, idx: number) => (
+											<tr key={idx} className="border-b border-gray-50">
+												<td className="py-2">{item.ctpDesNome || '—'}</td>
+												<td className="py-2">{item.impDesNome || '—'}</td>
+												<td className="py-2">{toIsoDate(item.pidDtaTaxas) || '—'}</td>
+												<td className="py-2 text-right">{formatBRL(Number(item.pidMnyValormn || item.pidMnyValorMneg || 0))}</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</details>
+					</CardContent>
+				</Card>
+
+				{/* Valores editáveis */}
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Valores e Prazo</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-4">
+						<div className="grid grid-cols-5 gap-4">
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Conversão</Label>
+								<Input type="date" value={fs.dataConversao || ''} disabled className="bg-gray-50 mt-1" />
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
+								<Input
+									type="number"
+									value={fs.prazoEmDias || ''}
+									onChange={(e) => updateTabFormState(tab.id, prev => ({
+										...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
+									}))}
+									className="border-blue-400 mt-1" placeholder="Ex: 30"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
+								<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Moeda Negociada</Label>
+								<NumericFormat
+									customInput={Input}
+									thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false}
+									value={fs.valorMoedaNegociada || ''}
+									onValueChange={(values) => updateTabFormState(tab.id, prev => ({ ...prev, valorMoedaNegociada: values.floatValue || 0 }))}
+									className="border-blue-400 mt-1" placeholder="Ex: 50.000,00"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Moeda Nacional (BRL)</Label>
+								<NumericFormat
+									customInput={Input}
+									thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false}
+									value={fs.valorMoedaNacional || ''}
+									onValueChange={(values) => updateTabFormState(tab.id, prev => ({ ...prev, valorMoedaNacional: values.floatValue || 0 }))}
+									className="border-blue-400 mt-1" placeholder="Ex: 50.000,00"
+								/>
+							</div>
+						</div>
+					</CardContent>
+				</Card>
+
+				{renderCalculationSection(tab)}
+			</div>
+		);
+	}
+
+	function renderCalculationSection(tab: CalculatorTab) {
+		const fs = tab.formState;
+		const taxaAnual = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, tab.taxaPeriod);
+
+		return (
+			<Card>
+				<CardHeader className="bg-gray-50 border-b py-3">
+					<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Cálculo de Encargos</CardTitle>
+				</CardHeader>
+				<CardContent className="pt-4 space-y-4">
+					{/* Taxa row */}
+					<div>
+						<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+							Taxa aplicada ({PERIOD_LABELS[tab.taxaPeriod]}) *
+						</Label>
+						<div className="flex gap-2 mt-1">
+							<NumericFormat
+								customInput={Input}
+								decimalSeparator=","
+								decimalScale={6}
+								allowNegative={false}
+								value={tab.taxaInputValue ?? ''}
+								onValueChange={(values) => handleTaxaInputChange(tab, values.floatValue ?? null)}
+								className="border-blue-400 flex-1"
+								placeholder="Ex: 10,5"
+							/>
+							<select
+								value={tab.taxaPeriod}
+								onChange={(e) => handleChangePeriod(tab, e.target.value as TaxaPeriod)}
+								className="border border-gray-300 rounded-md px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+							>
+								<option value="anual">Anual</option>
+								<option value="mensal">Mensal</option>
+								<option value="diario">Diário</option>
+							</select>
+							<Button
+								variant="outline" size="sm"
+								onClick={handleFetchCDI}
+								disabled={loadingBCBCDI}
+							>
+								{loadingBCBCDI ? <Spinner className="w-4 h-4" /> : 'Buscar CDI'}
+							</Button>
+						</div>
+						{fs.cdiAoAno && tab.taxaPeriod !== 'anual' && (
+							<p className="text-xs text-blue-600 mt-1">
+								Equivale a {fs.cdiAoAno.toFixed(4)}% ao ano
+							</p>
+						)}
+					</div>
+
+					{/* Spread — aparece após buscar CDI */}
+					{showSpread && (
+						<div className="bg-blue-50 border border-blue-100 p-3 rounded-lg space-y-2">
+							<Label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Spread (adicional ao CDI)</Label>
+							<div className="flex items-center gap-3">
+							<span className="text-sm font-medium text-gray-700 whitespace-nowrap">CDI +</span>
+							<NumericFormat
+								customInput={Input}
+								decimalSeparator=","
+								decimalScale={4}
+								allowNegative={false}
+								value={fs.spread || ''}
+								onValueChange={(values) => updateTabFormState(tab.id, prev => ({
+									...prev, spread: values.floatValue || 0
+								}))}
+								className="border-blue-400 w-28"
+								placeholder="0,0000"
+							/>
+							<span className="text-sm text-gray-500 whitespace-nowrap">% {PERIOD_SHORT[tab.taxaPeriod]}</span>
+							<span className="text-sm text-gray-300 mx-1">|</span>
+							<span className="text-sm font-semibold text-blue-700 whitespace-nowrap">
+								Taxa efetiva: {taxaAnual.toFixed(4)}% a.a.
+							</span>
+							</div>
+						</div>
+					)}
+
+					<Button
+						onClick={handleCalculate}
+						className="w-full bg-[#337ab7] hover:bg-blue-700 text-white"
+						size="lg"
+						disabled={!fs.cdiAoAno || fs.prazoEmDias <= 0}
+					>
+						Calcular Encargos
+					</Button>
+
+					{fs.encargosCalculados > 0 && (
+						<div className="space-y-3">
+							<div className="border border-blue-200 bg-white p-4 rounded-lg">
+								<p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Encargos Calculados</p>
+								<p className="text-3xl font-bold text-[#337ab7]">
+									{formatBRL(fs.encargosCalculados)}
+								</p>
+								<div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1 text-sm text-gray-600 border-t border-gray-100 pt-3">
+									<p>CDI Diária: {fs.cdiMensal ? (fs.cdiMensal / 30).toFixed(6) : fs.cdiAoAno ? (fs.cdiAoAno / 360).toFixed(6) : '0'}%</p>
+									<p>Prazo: {fs.prazoEmDias} dias</p>
+									<p>Base: {formatBRL(fs.valorMoedaNacional)}</p>
+									<p>Taxa: {taxaAnual.toFixed(4)}% a.a.</p>
+								</div>
+								<p className="mt-3 text-xs font-mono text-gray-400">
+									Valor × (Taxa / 360 / 100) × Prazo
+								</p>
+							</div>
+						</div>
+					)}
+				</CardContent>
+			</Card>
+		);
+	}
+
+	function renderOverview() {
+		const totalEncargos = tabs.reduce((sum, t) => sum + t.formState.encargosCalculados, 0);
+		const calculatedCount = tabs.filter(t => t.calculated).length;
+		const contractCount = tabs.filter(t => t.type === 'contract').length;
+		const expenseCount = tabs.filter(t => t.type === 'expense').length;
+
+		return (
+			<div className="space-y-6">
+				<div className="grid grid-cols-3 gap-4">
+					<Card className="border-blue-200">
+						<CardContent className="pt-4 text-center">
+							<p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Total de Itens</p>
+							<p className="text-3xl font-bold text-[#337ab7] mt-1">{tabs.length}</p>
+							<p className="text-xs text-gray-400 mt-1">{contractCount} contratos · {expenseCount} despesas</p>
+						</CardContent>
+					</Card>
+					<Card className="border-blue-200">
+						<CardContent className="pt-4 text-center">
+							<p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Calculados</p>
+							<p className="text-3xl font-bold text-[#337ab7] mt-1">{calculatedCount} / {tabs.length}</p>
+						</CardContent>
+					</Card>
+					<Card className="border-blue-200">
+						<CardContent className="pt-4 text-center">
+							<p className="text-xs text-gray-500 font-semibold uppercase tracking-wide">Total Encargos</p>
+							<p className="text-2xl font-bold text-[#337ab7] mt-1">{formatBRL(totalEncargos)}</p>
+						</CardContent>
+					</Card>
+				</div>
+
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Visão Consolidada</CardTitle>
+					</CardHeader>
+					<CardContent className="p-0">
+						<table className="w-full">
+							<thead>
+								<tr className="bg-gray-50/80 border-b border-gray-200">
+									<th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Item</th>
+									<th className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase">Tipo</th>
+									<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Valor Base</th>
+									<th className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase">Encargos</th>
+									<th className="px-4 py-3 text-center text-xs font-bold text-gray-500 uppercase">Status</th>
+								</tr>
+							</thead>
+							<tbody className="divide-y divide-gray-100">
+								{tabs.map(tab => (
+									<tr
+										key={tab.id}
+										className="hover:bg-blue-50/30 cursor-pointer transition-colors"
+										onClick={() => setActiveTabId(tab.id)}
+									>
+										<td className="px-4 py-3 text-sm font-medium text-gray-800">{tab.label}</td>
+										<td className="px-4 py-3">
+											<span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-50 text-blue-700">
+												{tab.type === 'contract' ? 'Contrato' : 'Despesa'}
+											</span>
+										</td>
+										<td className="px-4 py-3 text-sm text-right text-gray-700">
+											{formatBRL(tab.formState.valorMoedaNacional)}
+										</td>
+										<td className="px-4 py-3 text-sm text-right font-semibold text-[#337ab7]">
+											{tab.calculated ? formatBRL(tab.formState.encargosCalculados) : '—'}
+										</td>
+										<td className="px-4 py-3 text-center">
+											{tab.calculated
+												? <CheckCircle2 className="w-4 h-4 text-[#337ab7] mx-auto" />
+												: <span className="text-[10px] text-gray-400">Pendente</span>
+											}
+										</td>
+									</tr>
+								))}
+							</tbody>
+							<tfoot>
+								<tr className="bg-gray-50 border-t-2 border-gray-200">
+									<td colSpan={3} className="px-4 py-3 text-sm font-bold text-gray-700 text-right">
+										Total de Encargos:
+									</td>
+									<td className="px-4 py-3 text-sm text-right font-bold text-[#337ab7]">
+										{formatBRL(totalEncargos)}
+									</td>
+									<td />
+								</tr>
+							</tfoot>
+						</table>
+					</CardContent>
+				</Card>
+
+				<div className="flex gap-4">
+					<Button
+						onClick={handleSubmit}
+						disabled={totalEncargos <= 0 || submitting}
+						className="flex-1 bg-[#337ab7] hover:bg-blue-700 text-white disabled:opacity-40"
+						size="lg"
+					>
+						{submitting ? <Spinner className="w-4 h-4 mr-2" /> : null}
+						Enviar para Conexos
+					</Button>
+					<Button variant="outline" onClick={() => window.print()} size="lg">
+						Exportar PDF
+					</Button>
+				</div>
+			</div>
+		);
+	}
+
+	// ─── Main render ──────────────────────────────────────────────────────────
 
 	if (loading) {
 		return (
 			<ProtectedRoute>
 				<div className="flex items-center justify-center min-h-screen">
 					<Spinner className="w-8 h-8" />
-					<span className="ml-3">Carregando...</span>
+					<span className="ml-3 text-gray-600">Carregando...</span>
 				</div>
 			</ProtectedRoute>
 		);
 	}
 
-	if (!process || !selectedContract) {
+	if (!process) {
 		return (
 			<ProtectedRoute>
 				<div className="p-6 max-w-6xl mx-auto">
 					<Alert>
-						<AlertDescription>
-							Processo ou contrato não encontrado
-						</AlertDescription>
+						<AlertDescription>Processo não encontrado</AlertDescription>
 					</Alert>
 					<Button onClick={() => router.back()} className="mt-4">
 						<ArrowLeft className="w-4 h-4 mr-2" />
@@ -336,9 +966,6 @@ export default function ProcessCalculatorPage() {
 			</ProtectedRoute>
 		);
 	}
-
-	const isAVista = selectedContract.isAVista;
-	const isAPrazo = selectedContract.isAPrazo;
 
 	return (
 		<ProtectedRoute>
@@ -351,365 +978,53 @@ export default function ProcessCalculatorPage() {
 							Voltar
 						</Button>
 						<div>
-							<h1 className="text-2xl font-bold">Cálculo de Encargos</h1>
-							<p className="text-gray-600">
-								Processo: {formState.refExterna} - {formState.nomeCliente}
+							<h1 className="text-2xl font-bold text-gray-900">Cálculo de Encargos</h1>
+							<p className="text-gray-500 text-sm">
+								{tabs[0]?.formState.refExterna || processId} · {tabs[0]?.formState.nomeCliente || ''}
 							</p>
 						</div>
 					</div>
 				</div>
 
-				{error && (
-					<Alert className="mb-6 bg-red-50 border-red-200">
-						<AlertDescription className="text-red-800">{error}</AlertDescription>
+				{tabs.length === 0 ? (
+					<Alert>
+						<AlertDescription>Nenhum contrato ou despesa encontrado para este processo.</AlertDescription>
 					</Alert>
-				)}
+				) : (
+					<Tabs value={activeTabId} onValueChange={setActiveTabId}>
+						<TabsList className="w-full flex overflow-x-auto mb-4 h-auto flex-wrap gap-1 bg-gray-100 p-1 rounded-lg">
+							{tabs.map(tab => (
+								<TabsTrigger
+									key={tab.id}
+									value={tab.id}
+									className="gap-1.5 data-[state=active]:bg-white data-[state=active]:text-[#337ab7] data-[state=active]:shadow-sm"
+								>
+									{tab.type === 'contract'
+										? <DollarSign className="w-3.5 h-3.5 shrink-0" />
+										: <FileText className="w-3.5 h-3.5 shrink-0" />
+									}
+									<span className="text-xs">{tab.label}</span>
+									{tab.calculated && <CheckCircle2 className="w-3 h-3 text-[#337ab7] shrink-0" />}
+								</TabsTrigger>
+							))}
+							<TabsTrigger value="overview" className="data-[state=active]:bg-white data-[state=active]:text-[#337ab7] data-[state=active]:shadow-sm">
+								<span className="text-xs font-bold">Resumo</span>
+							</TabsTrigger>
+						</TabsList>
 
-				{/* DECK 1: Informações do Processo */}
-				<Card className="mb-6">
-					<CardHeader className="bg-gray-50 border-b">
-						<CardTitle>Deck 1: Informações do Processo</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-6">
-						<div className="grid grid-cols-2 gap-4">
-							<div>
-								<Label className="text-sm text-gray-600">Referência Externa</Label>
-								<Input
-									value={formState.refExterna}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Nome do Cliente</Label>
-								<Input
-									value={formState.nomeCliente}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Incoterm</Label>
-								<Input
-									value={formState.incoterm}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Moeda Negociada</Label>
-								<Input
-									value={formState.moedaNegociada}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
+						{tabs.map(tab => (
+							<TabsContent key={tab.id} value={tab.id}>
+								{tab.type === 'contract'
+									? renderContractForm(tab)
+									: renderExpenseForm(tab)
+								}
+							</TabsContent>
+						))}
 
-				{/* DECK 2: Informações do Contrato de Câmbio */}
-				<Card className="mb-6">
-					<CardHeader className="bg-gray-50 border-b">
-						<CardTitle>Deck 2: Informações do Contrato de Câmbio</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-6">
-						<div className="grid grid-cols-2 gap-4">
-							<div>
-								<Label className="text-sm text-gray-600">Data Fechamento</Label>
-								<Input
-									type="date"
-									value={formState.dataFechamento}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Prazo (em dias) *</Label>
-								<Input
-									type="number"
-									value={formState.prazoEmDias || ''}
-									onChange={(e) => setFormState(prev => ({
-										...prev,
-										prazoEmDias: parseInt(e.target.value, 10) || 0
-									}))}
-									className="border-blue-400"
-									placeholder="Ex: 30"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Vlr. Contrato ({formState.moedaNegociada})</Label>
-								<Input
-									value={new Intl.NumberFormat('pt-BR', {
-										minimumFractionDigits: 2,
-										maximumFractionDigits: 2
-									}).format(formState.valorMoedaNegociada)}
-									disabled
-									className="bg-gray-50"
-								/>
-							</div>
-							<div>
-								<Label className="text-sm text-gray-600">Vlr. Nacional (BRL)</Label>
-								<Input
-									value={new Intl.NumberFormat('pt-BR', {
-										style: 'currency',
-										currency: 'BRL'
-									}).format(formState.valorMoedaNacional)}
-									disabled
-									className="bg-gray-50 font-semibold"
-								/>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
-
-				{/* DECK 3: Taxas do Contrato - RENDERIZAÇÃO CONDICIONAL */}
-				<Card className="mb-6">
-					<CardHeader className="bg-gray-50 border-b">
-						<CardTitle>Deck 3: Taxas do Contrato</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-6">
-						{isAVista ? (
-							// À VISTA / ANTECIPADO: Mostrar apenas Taxa Fechamento
-							<div>
-								<Label className="text-sm text-gray-600">Taxa Fechamento</Label>
-								<Input
-									value={formState.taxaFechamento?.toFixed(4) || '0.0000'}
-									disabled
-									className="bg-gray-50 font-semibold"
-								/>
-								<p className="text-sm text-gray-500 mt-2">
-									ℹ Contrato à vista ou antecipado. Apenas Taxa Fechamento aplicável.
-								</p>
-							</div>
-						) : (
-							// A PRAZO: Mostrar todas as taxas
-							<div className="grid grid-cols-2 gap-4">
-								<div>
-									<Label className="text-sm text-gray-600">Taxa Ptax da D.I (Conexos)</Label>
-									<Input
-										value={formState.taxaPtaxDI?.toFixed(4) || '0.0000'}
-										disabled
-										className="bg-gray-50"
-									/>
-									{!formState.taxaPtaxDI && (
-										<p className="text-xs text-orange-600 mt-1">
-											⚠ Taxa Ptax D.I não disponível
-										</p>
-									)}
-								</div>
-								<div>
-									<Label className="text-sm text-gray-600">Taxa Spot do dia do fechamento (BCB)</Label>
-									<div className="flex gap-2">
-										<Input
-											value={formState.taxaSpotDoDia?.toFixed(4) || '0.0000'}
-											disabled
-											className="bg-gray-50"
-										/>
-										<Button
-											variant="outline"
-											size="sm"
-											onClick={async () => {
-												if (formState.dataFechamento) {
-													const rate = await fetchBCBPtaxVenda(formState.dataFechamento);
-													if (rate) {
-														setFormState(prev => ({ ...prev, taxaSpotDoDia: rate }));
-													}
-												}
-											}}
-										>
-											Atualizar
-										</Button>
-									</div>
-								</div>
-								<div>
-									<Label className="text-sm text-gray-600">Taxa Spot Negociada *</Label>
-									<Input
-										type="number"
-										step="0.0001"
-										value={formState.taxaSpotNegociada || ''}
-										onChange={(e) => setFormState(prev => ({
-											...prev,
-											taxaSpotNegociada: parseFloat(e.target.value) || null
-										}))}
-										className="border-blue-400"
-										placeholder="Ex: 5.5000"
-									/>
-								</div>
-								<div>
-									<Label className="text-sm text-gray-600">Taxa Futura *</Label>
-									<Input
-										type="number"
-										step="0.0001"
-										value={formState.taxaFutura || ''}
-										onChange={(e) => setFormState(prev => ({
-											...prev,
-											taxaFutura: parseFloat(e.target.value) || null
-										}))}
-										className="border-blue-400"
-										placeholder="Ex: 5.6000"
-									/>
-								</div>
-							</div>
-						)}
-					</CardContent>
-				</Card>
-
-				{/* Seção de Cálculo de Encargos */}
-				<Card className="mb-6">
-					<CardHeader className="bg-gray-50 border-b">
-						<CardTitle>Cálculo de Encargos</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-6">
-						<div className="grid grid-cols-2 gap-4 mb-4">
-							<div>
-								<Label className="text-sm text-gray-600">Taxa do dia do fechamento (ao ano) *</Label>
-								<div className="flex gap-2">
-									<Input
-										type="number"
-										step="0.0001"
-										value={formState.cdiAoAno || ''}
-										onChange={(e) => setFormState(prev => ({
-											...prev,
-											cdiAoAno: parseFloat(e.target.value) || null
-										}))}
-										className="border-blue-400"
-										placeholder="Ex: 10.5"
-									/>
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={handleFetchCDI}
-										disabled={loadingBCBCDI}
-									>
-										{loadingBCBCDI ? <Spinner className="w-4 h-4" /> : 'Buscar CDI'}
-									</Button>
-								</div>
-							</div>
-						</div>
-
-						<div className="bg-blue-50 p-4 rounded-lg mb-4">
-							<p className="text-sm font-semibold mb-2">Fórmula:</p>
-							<p className="text-sm font-mono">
-								Encargo = Valor × (CDI mensal ÷ 30 ÷ 100) × Prazo em dias
-							</p>
-							<p className="text-xs text-gray-600 mt-1">
-								CDI ao ano em percentual (ex: 12,65%) — base 360 dias corridos
-							</p>
-						</div>
-
-						<Button
-							onClick={handleCalculate}
-							className="w-full mb-4 bg-blue-600 hover:bg-blue-700 text-white"
-							size="lg"
-							disabled={!formState.cdiAoAno || formState.prazoEmDias <= 0}
-						>
-							Calcular Encargos
-						</Button>
-
-						{formState.encargosCalculados > 0 && (
-							<div className="space-y-3">
-								<div className="bg-green-50 p-4 rounded-lg">
-									<p className="text-sm font-semibold mb-1">Encargos Calculados (CDI):</p>
-									<p className="text-2xl font-bold text-green-700">
-										{new Intl.NumberFormat('pt-BR', {
-											style: 'currency',
-											currency: 'BRL'
-										}).format(formState.encargosCalculados)}
-									</p>
-									<div className="mt-2 text-sm text-gray-600">
-										<p>CDI Diária (base 30d): {formState.cdiMensal ? (formState.cdiMensal / 30).toFixed(6) : formState.cdiAoAno ? (formState.cdiAoAno / 360).toFixed(6) : '0'}%</p>
-										<p>Prazo: {formState.prazoEmDias} dias</p>
-										<p>Base: {new Intl.NumberFormat('pt-BR', {
-											style: 'currency',
-											currency: 'BRL'
-										}).format(formState.valorMoedaNacional)}</p>
-									</div>
-								</div>
-
-								{formState.variacaoCambial !== undefined && (
-									<div className={`p-4 rounded-lg ${formState.variacaoCambial > 0 ? 'bg-red-50' : formState.variacaoCambial < 0 ? 'bg-green-50' : 'bg-gray-50'}`}>
-										<p className="text-sm font-semibold mb-1">
-											Variação Cambial{' '}
-											{formState.variacaoCambial > 0
-												? '(Perda Cambial)'
-												: formState.variacaoCambial < 0
-													? '(Ganho Cambial)'
-													: '(Sem Variação)'}
-											:
-										</p>
-										<p className={`text-xl font-bold ${formState.variacaoCambial > 0 ? 'text-red-700' : formState.variacaoCambial < 0 ? 'text-green-700' : 'text-gray-600'}`}>
-											{new Intl.NumberFormat('pt-BR', {
-												style: 'currency',
-												currency: 'BRL'
-											}).format(formState.variacaoCambial)}
-										</p>
-										<div className="mt-2 text-xs text-gray-500">
-											<p>
-												{new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 2 }).format(formState.valorMoedaNegociada)}{" "}
-												× ({formState.taxaPtaxDI?.toFixed(4)} − {formState.taxaFechamento?.toFixed(4)})
-											</p>
-											<p className="mt-1 italic">Exibido separadamente — não compõe o total de encargos CDI</p>
-										</div>
-									</div>
-								)}
-							</div>
-						)}
-					</CardContent>
-				</Card>
-
-				{/* Ações */}
-				<div className="flex gap-4">
-					<Button
-						onClick={handleSubmit}
-						disabled={formState.encargosCalculados <= 0 || submitting}
-						className="flex-1 bg-blue-600 hover:bg-blue-700 text-white disabled:bg-blue-300"
-						size="lg"
-					>
-						{submitting ? <Spinner className="w-4 h-4 mr-2" /> : null}
-						Enviar para Conexos
-					</Button>
-					<Button
-						variant="outline"
-						onClick={handlePrint}
-						size="lg"
-					>
-						Exportar PDF
-					</Button>
-				</div>
-
-				{/* Tabela de Despesas Existentes */}
-				{process.expenses && process.expenses.length > 0 && (
-					<Card className="mt-6">
-						<CardHeader>
-							<CardTitle>Despesas Atuais no Conexos</CardTitle>
-						</CardHeader>
-						<CardContent>
-							<table className="w-full">
-								<thead>
-									<tr className="bg-gray-100">
-										<th className="p-2 text-left text-sm">Tipo</th>
-										<th className="p-2 text-left text-sm">Descrição</th>
-										<th className="p-2 text-right text-sm">Valor (BRL)</th>
-									</tr>
-								</thead>
-								<tbody>
-									{process.expenses.map((exp: any, i: number) => (
-										<tr key={i} className="border-t">
-											<td className="p-2 text-sm">{exp.ctpDesNome}</td>
-											<td className="p-2 text-sm">{exp.impDesNome}</td>
-											<td className="p-2 text-right text-sm font-semibold">
-												{new Intl.NumberFormat('pt-BR', {
-													style: 'currency',
-													currency: 'BRL'
-												}).format(exp.pidMnyValormn || 0)}
-											</td>
-										</tr>
-									))}
-								</tbody>
-							</table>
-						</CardContent>
-					</Card>
+						<TabsContent value="overview">
+							{renderOverview()}
+						</TabsContent>
+					</Tabs>
 				)}
 			</div>
 		</ProtectedRoute>

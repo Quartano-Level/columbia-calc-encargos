@@ -1194,7 +1194,7 @@ function createContractSheet(
 }
 
 /**
- * Cria worksheet da aba "Visão Geral - INOX Tech".
+ * Cria worksheet da aba "Sem Encargos" (processos sem encargos financeiros mas com adiantamento).
  * 30 colunas = 28 originais + Adiantamento (col I) + Saldo Base (col J).
  * Linha de rodapé com "Valor a Permutar" em negrito.
  */
@@ -1202,59 +1202,60 @@ function createInoxSheet(
   sheetData: (string | number | null)[][],
   processGroups: number[]
 ): XLSX.WorkSheet {
+  // 31 colunas: 28 base + 3 novas (Adiantamento Real, Adiantamento 30%, Saldo Base 70%)
   const colWidths = [
     8, 10, 18, 30, 12, 10, 16, 16,  // A–H (Filial→Vlr.Nacional)
-    18, 18,                           // I: Adiantamento, J: Saldo Base
-    14, 12, 14, 14, 16, 16,          // K–P (Dt.Fech, Per.Finmto, NF, DtEmiss, VlrBruto, VlrNF)
-    12, 14, 14, 14, 12, 14,          // Q–V (O–T ocultas)
-    18, 16, 14, 14, 18, 14, 12, 18  // W–AD (Encargos Fin… Encargos Prov)
+    18, 18, 18,                       // I: Adto Real, J: Adto 30%, K: Saldo Base 70%
+    14, 12, 14, 14, 16, 16,          // L–Q (Dt.Fech, Per.Finmto, NF, DtEmiss, VlrBruto, VlrNF)
+    12, 14, 14, 14, 12, 14,          // R–W (O–T ocultas)
+    18, 16, 14, 14, 18, 14, 12, 18  // X–AE (Encargos Fin… Encargos Prov)
   ];
 
-  // Índices na aba INOX (deslocados +2 a partir do índice 10)
-  // currencyCols: Vlr Contrato(6), Vlr Nacional(7), Adiantamento(8), Saldo Base(9),
-  //               Vlr Bruto(14), Vlr NF(15), Encargos Fin(22), Vlr Enc Dia(23), Encargos Prov(29)
+  // Índices na aba Sem Encargos (deslocados +3 a partir do índice 11)
+  // currencyCols: Vlr Nacional(7), Adto Real(8), Adto 30%(9), Saldo Base(10),
+  //               Vlr Bruto(15), Vlr NF(16), Encargos Fin(23), Vlr Enc Dia(24), Encargos Prov(30)
   const ws = createV2Sheet(
     sheetData,
     colWidths,
-    [4, 6],                            // financialCols: Taxa Câmbio, Vlr Contrato (sem moeda)
-    [7, 8, 9, 14, 15, 22, 23, 29],     // currencyCols: Vlr Nacional, Adiantamento, Saldo Base, etc.
-    [11, 28],                          // intCols: Per.Finmto, Per Prov Juros
-    [24, 25, 26],                      // rateCols: Tx Enc Dia, CDI Dia, Delta
+    [4, 6],                                // financialCols: Taxa Câmbio, Vlr Contrato
+    [7, 8, 9, 10, 15, 16, 23, 24, 30],    // currencyCols
+    [12, 29],                              // intCols: Per.Finmto, Per Prov Juros
+    [25, 26, 27],                          // rateCols: Tx Enc Dia, CDI Dia, Delta
     { processGroups }
   );
 
   const numRows = sheetData.length;
   const fmtDate = 'dd/mm/yyyy';
 
-  // Ocultar colunas O–T (agora índices 16–21 no INOX)
-  for (let c = 16; c <= 21; c++) {
+  // Ocultar colunas O–T (agora índices 17–22 no layout Sem Encargos)
+  for (let c = 17; c <= 22; c++) {
     if (ws['!cols'] && ws['!cols'][c]) {
       (ws['!cols'][c] as Record<string, unknown>).hidden = true;
     }
   }
 
-  // Formatar Dt Fechamento (col K = índice 10) como data
+  // Formatar Dt Fechamento (col L = índice 11) como data
   for (let r = 1; r < numRows; r++) {
     const rowNum = r + 1;
-    const cellK = ws[colLetter(10) + rowNum];
-    if (cellK && (typeof cellK.v === 'number' || cellK.t === 'n')) {
-      cellK.z = fmtDate;
-      cellK.t = 'n';
+    const cellL = ws[colLetter(11) + rowNum];
+    if (cellL && (typeof cellL.v === 'number' || cellL.t === 'n')) {
+      cellL.z = fmtDate;
+      cellL.t = 'n';
     }
   }
 
-  // Colorir cabeçalhos de simulação em laranja: Data Prov(27), Per Prov Juros(28), Encargos Prov(29)
+  // Colorir cabeçalhos de simulação em laranja: Data Prov(28), Per Prov Juros(29), Encargos Prov(30)
   const ORANGE_HEADER: XLSX.CellStyle = {
     font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 10 },
     fill: { fgColor: { rgb: 'E07020' } },
     alignment: { horizontal: 'center', vertical: 'center' },
   };
-  for (const ci of [27, 28, 29]) {
+  for (const ci of [28, 29, 30]) {
     const ref = colLetter(ci) + '1';
     if (ws[ref]) ws[ref].s = ORANGE_HEADER;
   }
 
-  // Estilizar linha de rodapé (última linha = "Valor a Permutar") em negrito
+  // Estilizar linha de rodapé ("Valor a Permutar") em negrito
   const footerRowNum = numRows + 1;
   const FOOTER_STYLE: XLSX.CellStyle = {
     font: { bold: true, sz: 10 },
@@ -1266,12 +1267,12 @@ function createInoxSheet(
     ws[ref].s = { ...(ws[ref].s || {}), ...FOOTER_STYLE };
   }
 
-  // Soma Encargos Prov (col AD = índice 29) na linha de rodapé — fórmula en-US (padrão XLSX)
-  const adRef = colLetter(29) + footerRowNum;
+  // Soma Encargos Prov (col AE = índice 30) na linha de rodapé
   const lastDataRow = numRows;
-  ws[adRef] = {
+  const aeRef = colLetter(30) + footerRowNum;
+  ws[aeRef] = {
     t: 'n',
-    f: `SUM(AD2:AD${lastDataRow})`,
+    f: `SUM(AE2:AE${lastDataRow})`,
     z: '"R$ "#,##0.00',
     s: FOOTER_STYLE,
   };
@@ -1286,6 +1287,7 @@ export interface CDIHistoryEntry {
 
 export interface Com299Row {
   docCod: number;
+  priCod: number;
   mnyBruto: number;
   mnyAcrescimo: number;
   mnyDesconto: number;
@@ -1294,6 +1296,8 @@ export interface Com299Row {
   mnyTitPermuta: number;
   mnyTitAberto: number;
   mnyTitPermutar: number;
+  docDtaEmissao: string | null;
+  borDtaFinalizado: string | null;
 }
 
 export interface ExportV2Params {
@@ -1302,19 +1306,99 @@ export interface ExportV2Params {
   cdiHistory?: CDIHistoryEntry[];
   /** Data Prov no formato dd/mm/yyyy (padrão: hoje) */
   dataProv?: string;
-  /** Valor a Permutar INOX (soma mnyTitPermutar da com299) */
+  /** Valor a Permutar (soma mnyTitPermutar dos adiantamentos em com299) */
   valorPermutar?: number;
   /** Lista com299 para terceira página (PDF e XLSX) */
   com299List?: Com299Row[];
 }
 
-/** pesCod da INOX Tech no Conexos */
-const INOX_PES_COD = 191;
+/**
+ * Verifica se um processo tem encargos financeiros nos registros com017.
+ * Retorna true se houver ao menos uma despesa 'ENCARGOS FINANCEIROS' com valor > 0.
+ */
+function processHasEncargos(proc: any): boolean {
+  for (const inv of (proc.invoices || [])) {
+    for (const d of (inv.encargos?.despesas || [])) {
+      if ((d.ctpDesNome || '').toUpperCase() === 'ENCARGOS FINANCEIROS' && Number(d.dppMnyValorMn ?? 0) > 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
-/** Retorna true se o processo pertence à INOX Tech */
-function isInoxProcess(proc: any): boolean {
-  if (proc.pesCod != null) return Number(proc.pesCod) === INOX_PES_COD;
-  return (proc.invoices || []).some((inv: any) => Number(inv.pesCod) === INOX_PES_COD);
+/**
+ * Separa processos em dois grupos:
+ * - comEncargos: tem encargos financeiros (independente de adiantamento), OU não tem nenhum dos dois
+ * - semEncargos: NÃO tem encargos financeiros MAS tem adiantamento no com299
+ */
+function classifyProcesses(
+  processes: any[],
+  com299List: Com299Row[]
+): { comEncargos: any[]; semEncargos: any[] } {
+  const priCodsComAdto = new Set<number>(
+    com299List.map(r => r.priCod).filter(id => id > 0)
+  );
+
+  const comEncargos: any[] = [];
+  const semEncargos: any[] = [];
+
+  for (const proc of processes) {
+    const hasEncargos = processHasEncargos(proc);
+    const hasAdiantamento = priCodsComAdto.has(Number(proc.priCod));
+
+    if (!hasEncargos && hasAdiantamento) {
+      semEncargos.push(proc);
+    } else {
+      comEncargos.push(proc);
+    }
+  }
+
+  return { comEncargos, semEncargos };
+}
+
+/**
+ * Vincula registros com299 de um processo aos seus contratos.
+ * - 1 contrato: vínculo direto
+ * - N contratos: match por proximidade de valor (adiantamento ≈ 10–30% do vlrMneg)
+ * - Fallback: primeiro contrato
+ *
+ * Retorna Map<índice do contrato, Com299Row[]>
+ */
+function matchAdiantamentoToContract(
+  adtos: Com299Row[],
+  contracts: any[]
+): Map<number, Com299Row[]> {
+  const result = new Map<number, Com299Row[]>();
+  if (contracts.length === 0) return result;
+
+  if (contracts.length === 1) {
+    result.set(0, adtos);
+    return result;
+  }
+
+  for (const adto of adtos) {
+    const adtoVal = adto.mnyTitValor;
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+
+    for (let i = 0; i < contracts.length; i++) {
+      const vlrMneg = Number(contracts[i].vlrMneg ?? contracts[i].imcMnyValor ?? 0);
+      const diff = Math.min(
+        Math.abs(adtoVal - vlrMneg * 0.10),
+        Math.abs(adtoVal - vlrMneg * 0.30)
+      );
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+
+    if (!result.has(bestIdx)) result.set(bestIdx, []);
+    result.get(bestIdx)!.push(adto);
+  }
+
+  return result;
 }
 
 /** Retorna data de hoje em dd/mm/yyyy */
@@ -1324,54 +1408,86 @@ function todayDDMMYYYY(): string {
 }
 
 /**
- * Constrói a aba INOX Tech: mesmas colunas da Visão Geral + Adiantamento (col H+1) + Saldo Base (col H+2).
- * Após os dados, insere linha de rodapé com "Valor a Permutar" na coluna Adiantamento.
+ * Constrói a aba "Sem Encargos": processos sem encargos financeiros mas com adiantamento.
+ * Baseada no layout da Visão Geral + 3 colunas extras após Vlr. Nacional (col H):
  *
- * Layout de colunas (30 total):
- *   0–7: A–H (Filial→Vlr.Nacional)
- *   8: Adiantamento (VlrNac × 0.3)
- *   9: Saldo Base (VlrNac × 0.7)
- *   10–29: demais colunas (Dt.Fechamento → AB)
+ * Layout de colunas (31 total):
+ *   0–7:  A–H (Filial → Vlr.Nacional)
+ *   8:    Adiantamento (Real) — valor real do com299 vinculado ao contrato
+ *   9:    Adiantamento (30%) — VlrNac × 0.3 (referência calculada)
+ *   10:   Saldo Base (70%)  — VlrNac × 0.7
+ *   11–30: demais colunas (Dt.Fechamento → Encargos Prov)
  */
-function buildInoxSheetData(
-  inoxProcesses: any[],
+function buildSemEncargosSheetData(
+  processes: any[],
+  com299List: Com299Row[],
   valorPermutar: number,
   cdiHistory?: CDIHistoryEntry[]
 ): HierarchicalSheetResult {
+  // Agrupamento de adiantamentos por priCod
+  const adtoByPriCod = new Map<number, Com299Row[]>();
+  for (const row of com299List) {
+    if (!row.priCod) continue;
+    if (!adtoByPriCod.has(row.priCod)) adtoByPriCod.set(row.priCod, []);
+    adtoByPriCod.get(row.priCod)!.push(row);
+  }
+
   // Reutiliza o builder padrão para obter as linhas base (28 colunas)
-  const { data: base, processGroups } = buildContractSheetData(inoxProcesses, cdiHistory);
+  const { data: base, processGroups } = buildContractSheetData(processes, cdiHistory);
   const baseHeaders = base[0] as string[];
   const baseRows = base.slice(1) as (string | number | null)[][];
 
-  // Inserir cabeçalhos Adiantamento e Saldo Base após Vlr. Nacional (índice 7)
+  // Inserir cabeçalhos após Vlr. Nacional (índice 7)
   const headers: string[] = [
-    ...baseHeaders.slice(0, 8),   // A–H
-    'Adiantamento',                // col I (novo)
-    'Saldo Base',                  // col J (novo)
-    ...baseHeaders.slice(8),       // K… (desloca originais)
+    ...baseHeaders.slice(0, 8),     // A–H
+    'Adiantamento (Real)',           // col I (8)
+    'Adiantamento (30%)',            // col J (9)
+    'Saldo Base (70%)',              // col K (10)
+    ...baseHeaders.slice(8),        // L… (desloca originais)
   ];
 
-  const rows: (string | number | null)[][] = baseRows.map(row => {
+  // Mapa de contrato-index → soma de adiantamentos reais (para preencher por linha)
+  // A cada processo, precisa saber o índice relativo de cada contrato
+  let rowIdx = 0;
+  const adtoRealByRowIdx = new Map<number, number | null>();
+
+  for (const proc of processes) {
+    const contracts = proc.contracts || [];
+    const priCod = Number(proc.priCod);
+    const adtos = adtoByPriCod.get(priCod) || [];
+    const contractAdtoMap = matchAdiantamentoToContract(adtos, contracts);
+
+    for (let ci = 0; ci < contracts.length; ci++) {
+      const linked = contractAdtoMap.get(ci) || [];
+      const realVal = linked.length > 0
+        ? linked.reduce((s, r) => s + r.mnyTitValor, 0)
+        : null;
+      adtoRealByRowIdx.set(rowIdx, realVal);
+      rowIdx++;
+    }
+  }
+
+  const rows: (string | number | null)[][] = baseRows.map((row, idx) => {
     const vlrNacional = typeof row[7] === 'number' ? row[7] : null;
-    const adiantamento = vlrNacional != null ? vlrNacional * 0.3 : null;
+    const adtoReal = adtoRealByRowIdx.get(idx) ?? null;
+    const adto30 = vlrNacional != null ? vlrNacional * 0.3 : null;
     const saldoBase = vlrNacional != null ? vlrNacional * 0.7 : null;
     return [
       ...row.slice(0, 8),
-      adiantamento,
+      adtoReal,
+      adto30,
       saldoBase,
       ...row.slice(8),
     ];
   });
 
-  // Linha de rodapé: label na col A, valor na col Adiantamento (índice 8). Encargos Prov (29) será fórmula SUM no Excel
+  // Linha de rodapé: "Valor a Permutar" na col Adiantamento (Real) (índice 8)
   const footerRow: (string | number | null)[] = new Array(headers.length).fill(null);
   footerRow[0] = 'Valor a Permutar';
   footerRow[8] = valorPermutar;
   rows.push(footerRow);
-  // O footer não pertence a nenhum grupo de processo
-  const footerGroups = [...processGroups, -1];
 
-  return { data: [headers, ...rows], processGroups: footerGroups };
+  return { data: [headers, ...rows], processGroups: [...processGroups, -1] };
 }
 
 /**
@@ -1380,6 +1496,9 @@ function buildInoxSheetData(
 function buildCom299SheetData(com299List: Com299Row[]): (string | number | null)[][] {
   const headers = [
     'docCod',
+    'priCod',
+    'Dt. Emissão',
+    'Dt. Baixa',
     'Valor Total',
     'Valor Acresc',
     'Valor Desc',
@@ -1391,6 +1510,9 @@ function buildCom299SheetData(com299List: Com299Row[]): (string | number | null)
   ];
   const rows: (string | number | null)[][] = com299List.map((r) => [
     r.docCod,
+    r.priCod,
+    formatDateForExport(r.docDtaEmissao),
+    formatDateForExport(r.borDtaFinalizado),
     r.mnyBruto,
     r.mnyAcrescimo,
     r.mnyDesconto,
@@ -1402,7 +1524,7 @@ function buildCom299SheetData(com299List: Com299Row[]): (string | number | null)
   ]);
   if (rows.length > 0) {
     const sumRow: (string | number | null)[] = [
-      'TOTAL',
+      'TOTAL', '', '', '',
       com299List.reduce((s, r) => s + r.mnyBruto, 0),
       com299List.reduce((s, r) => s + r.mnyAcrescimo, 0),
       com299List.reduce((s, r) => s + r.mnyDesconto, 0),
@@ -1421,21 +1543,22 @@ function buildCom299SheetData(com299List: Com299Row[]): (string | number | null)
  * Cria worksheet da aba com299
  */
 function createCom299Sheet(sheetData: (string | number | null)[][]): XLSX.WorkSheet {
-  const colWidths = [12, 16, 16, 16, 16, 16, 16, 16, 16];
+  const colWidths = [12, 12, 14, 14, 16, 16, 16, 16, 16, 16, 16, 16];
   const ws = createV2Sheet(
     sheetData,
     colWidths,
     [],
-    [1, 2, 3, 4, 5, 6, 7, 8],
-    [0],
+    [4, 5, 6, 7, 8, 9, 10, 11],
+    [0, 1],
     []
   );
   const numRows = sheetData.length;
   const fmtReais = '"R$ "#,##0.00';
-  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+  // 12 colunas: A=docCod, B=priCod, C=Dt.Emissão, D=Dt.Baixa, E..L = valores monetários
+  const colLetters = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L'];
   const FOOTER_STYLE: XLSX.CellStyle = { font: { bold: true }, fill: { fgColor: { rgb: 'FFF3E0' } } };
   for (let r = 1; r < numRows; r++) {
-    for (let c = 1; c <= 8; c++) {
+    for (let c = 4; c <= 11; c++) {
       const cell = ws[colLetters[c] + (r + 1)];
       if (cell && (typeof cell.v === 'number' || cell.t === 'n')) {
         cell.z = fmtReais;
@@ -1443,7 +1566,7 @@ function createCom299Sheet(sheetData: (string | number | null)[][]): XLSX.WorkSh
       }
     }
     if (r === numRows - 1) {
-      for (let c = 0; c < 9; c++) {
+      for (let c = 0; c < 12; c++) {
         const ref = colLetters[c] + (r + 1);
         if (ws[ref]) ws[ref].s = { ...(ws[ref].s || {}), ...FOOTER_STYLE };
       }
@@ -1452,19 +1575,81 @@ function createCom299Sheet(sheetData: (string | number | null)[][]): XLSX.WorkSh
   return ws;
 }
 
+/**
+ * Aba "Exposição Cambial" — uma linha por duplicata FOB de cada título de cada NF.
+ * Mostra o valor FOB real que deve ser usado como saldo base da exposição cambial,
+ * em vez do valor total do contrato de câmbio.
+ */
+function buildExposicaoCambialSheetData(processes: any[]): (string | number | null)[][] {
+  const headers = [
+    'Filial', 'Código', 'Referência', 'Cliente',
+    'Taxa Câmbio', 'Moeda', 'Vlr. Contrato',
+    'Nº NF', 'Data Emissão', 'Vlr. NF',
+    'Título', 'Parcela', 'Vencimento', 'Vlr. Título', 'Status Pgto', 'Data Baixa',
+    'Composição (impDesNome)', 'impCod', 'Vlr. Duplicata (FOB)', 'Ação (ftdVldAcao)',
+  ];
+
+  const rows: (string | number | null)[][] = [];
+
+  for (const proc of processes) {
+    const filCod = proc.filCod ?? '';
+    const priCod = proc.priCod || '';
+    const ref = proc.priEspRefcliente || String(proc.priCod || '');
+    const cliente = proc.dpeNomPessoa || '';
+    const contract = proc.contracts?.[0];
+    const taxa = contract?.imcFltTxFec != null ? Number(contract.imcFltTxFec) : (contract?.imcMnyTaxa != null ? Number(contract.imcMnyTaxa) : null);
+    const moeda = contract?.moeEspNome || '';
+    const vlrContrato = contract?.vlrMneg != null ? Number(contract.vlrMneg) : (contract?.imcMnyValor != null ? Number(contract.imcMnyValor) : null);
+
+    for (const inv of (proc.invoices || [])) {
+      const nfNum = inv.docEspNumero || String(inv.docCod || '');
+      const dtEmissao = formatDateForExport(inv.docDtaEmissao);
+      const vlrNF = inv.docMnyValor != null ? Number(inv.docMnyValor) : null;
+
+      for (const title of (inv.titles || [])) {
+        const duplicatas = title.duplicatas || [];
+        const fobEntries = duplicatas.filter((d: any) =>
+          (d.impDesNome || '').toUpperCase() === 'FOB' && d.ftdVldAcao === 1
+        );
+
+        if (fobEntries.length === 0) continue;
+
+        for (const dup of fobEntries) {
+          rows.push([
+            filCod, priCod, ref, cliente,
+            taxa, moeda, vlrContrato,
+            nfNum, dtEmissao, vlrNF,
+            title.titEspNumero || String(title.titCod || ''),
+            title.dupEspOrdem || '',
+            formatDateForExport(title.titDtaVencimento),
+            title.titMnyValor != null ? Number(title.titMnyValor) : null,
+            mapPagoStatus(title.pago),
+            formatDateForExport(title.borDtaMvto),
+            dup.impDesNome || '',
+            dup.impCod ?? null,
+            dup.ftdMnyValor != null ? Number(dup.ftdMnyValor) : null,
+            dup.ftdVldAcao ?? null,
+          ]);
+        }
+      }
+    }
+  }
+
+  return [headers, ...rows];
+}
+
 export function exportDelaysXLSXV2({ processes, cdiHistory, valorPermutar = 0, com299List = [] }: ExportV2Params): void {
   const wb = XLSX.utils.book_new();
 
-  // Separar processos INOX dos demais
-  const regularProcesses = processes.filter(p => !isInoxProcess(p));
-  const inoxProcesses = processes.filter(p => isInoxProcess(p));
+  // Classificar processos: com encargos (ou sem nada) → Visão Geral; sem encargos mas com adiantamento → Sem Encargos
+  const { comEncargos, semEncargos } = classifyProcesses(processes, com299List);
 
-  // Aba 1: Visão Geral (sem INOX)
-  const { data: contractData, processGroups } = buildContractSheetData(regularProcesses, cdiHistory);
+  // Aba 1: Visão Geral (processos com encargos + sem encargos e sem adiantamento)
+  const { data: contractData, processGroups } = buildContractSheetData(comEncargos, cdiHistory);
   const wsHier = createContractSheet(contractData, processGroups);
   XLSX.utils.book_append_sheet(wb, wsHier, 'Visão Geral');
 
-  // Aba 2: Notas Fiscais
+  // Aba 2: Notas Fiscais (todos os processos)
   const nfData = buildNFsSheetData(processes);
   const wsNF = createV2Sheet(
     nfData,
@@ -1475,7 +1660,7 @@ export function exportDelaysXLSXV2({ processes, cdiHistory, valorPermutar = 0, c
   );
   XLSX.utils.book_append_sheet(wb, wsNF, 'Notas Fiscais');
 
-  // Aba 3: Títulos
+  // Aba 3: Títulos (todos os processos)
   const titData = buildTitulosSheetData(processes);
   const wsTit = createV2Sheet(
     titData,
@@ -1486,14 +1671,27 @@ export function exportDelaysXLSXV2({ processes, cdiHistory, valorPermutar = 0, c
   );
   XLSX.utils.book_append_sheet(wb, wsTit, 'Títulos');
 
-  // Aba 4: Visão Geral - INOX Tech (se houver processos INOX)
-  if (inoxProcesses.length > 0) {
-    const { data: inoxData, processGroups: inoxGroups } = buildInoxSheetData(inoxProcesses, valorPermutar, cdiHistory);
-    const wsInox = createInoxSheet(inoxData, inoxGroups);
-    XLSX.utils.book_append_sheet(wb, wsInox, 'Visão Geral - INOX Tech');
+  // Aba 4: Sem Encargos (processos sem encargos financeiros mas com adiantamento)
+  if (semEncargos.length > 0) {
+    const { data: semData, processGroups: semGroups } = buildSemEncargosSheetData(semEncargos, com299List, valorPermutar, cdiHistory);
+    const wsSem = createInoxSheet(semData, semGroups);
+    XLSX.utils.book_append_sheet(wb, wsSem, 'Sem Encargos');
   }
 
-  // Aba 5: com299 (dados INOX)
+  // Aba 5: Exposição Cambial (FOB) — saldo base real por título/duplicata
+  const exposicaoData = buildExposicaoCambialSheetData(processes);
+  if (exposicaoData.length > 1) {
+    const wsExposicao = createV2Sheet(
+      exposicaoData,
+      [8, 10, 18, 28, 12, 10, 16, 14, 14, 16, 14, 8, 14, 16, 12, 14, 22, 10, 18, 10],
+      [4],                            // financialCols: Taxa Câmbio
+      [6, 9, 13, 18],                 // currencyCols: Vlr Contrato, Vlr NF, Vlr Título, Vlr Duplicata FOB
+      [17, 19],                        // intCols: impCod, Ação
+    );
+    XLSX.utils.book_append_sheet(wb, wsExposicao, 'Exposição Cambial');
+  }
+
+  // Aba 6: com299 (todos os adiantamentos)
   if (com299List.length > 0) {
     const com299Data = buildCom299SheetData(com299List);
     const wsCom299 = createCom299Sheet(com299Data);
@@ -1643,40 +1841,39 @@ function enrichInoxRowsWithDataProv(
   const dataProvDate = parseDateDDMMYYYY(dataProvStr);
   return rows.map(row => {
     const r = [...row];
-    const dtFech = r[10]; // Dt. Fechamento no INOX (deslocado +2)
+    const dtFech = r[11]; // Dt. Fechamento no layout Sem Encargos (índice 11, deslocado +3)
     let fechDate: Date | null = null;
     if (typeof dtFech === 'number') {
       fechDate = new Date(new Date(1899, 11, 30).getTime() + dtFech * 86400000);
     } else if (typeof dtFech === 'string' && dtFech) {
       fechDate = parseDateDDMMYYYY(dtFech);
     }
-    r[27] = dataProvStr;
+    r[28] = dataProvStr; // Data Prov (índice 28)
     let perProv: number | null = null;
     if (fechDate && dataProvDate) {
       const days = Math.ceil((dataProvDate.getTime() - fechDate.getTime()) / 86400000);
       perProv = days > 0 ? days : 0;
     }
-    r[28] = perProv;
+    r[29] = perProv; // Per Prov Juros (índice 29)
     const vlrNac = typeof r[7] === 'number' ? r[7] : null;
-    const cdiDia = typeof r[25] === 'number' ? r[25] : null; // CDI Dia no INOX (índice 25)
+    const cdiDia = typeof r[26] === 'number' ? r[26] : null; // CDI Dia (índice 26)
     if (vlrNac != null && cdiDia != null && perProv != null && perProv > 0) {
-      r[29] = vlrNac * (cdiDia / 100) * perProv;
+      r[30] = vlrNac * (cdiDia / 100) * perProv; // Encargos Prov (índice 30)
     }
     return r;
   });
 }
 
 /**
- * V2 PDF: Gera relatório em PDF com Visão Geral (e Visão Geral - INOX Tech se houver).
+ * V2 PDF: Gera relatório em PDF com Visão Geral (e Sem Encargos se houver processos sem encargos mas com adiantamento).
  * Data Prov vem do parâmetro (date picker). Per Prov Juros e Encargos Prov calculados automaticamente.
  */
 export function exportDelaysV2PDF({ processes, cdiHistory, dataProv, valorPermutar = 0, com299List = [] }: ExportV2Params): void {
   const dataProvStr = dataProv ?? todayDDMMYYYY();
 
-  const regularProcesses = processes.filter(p => !isInoxProcess(p));
-  const inoxProcesses = processes.filter(p => isInoxProcess(p));
+  const { comEncargos, semEncargos } = classifyProcesses(processes, com299List);
 
-  const { data: contractData, processGroups } = buildContractSheetData(regularProcesses, cdiHistory);
+  const { data: contractData, processGroups } = buildContractSheetData(comEncargos, cdiHistory);
   const contractHeaders = contractData[0] as string[];
   const contractRows = contractData.slice(1) as (string | number | null)[][];
   const enrichedRows = enrichContractRowsWithDataProv(contractRows, dataProvStr);
@@ -1694,43 +1891,46 @@ export function exportDelaysV2PDF({ processes, cdiHistory, dataProv, valorPermut
     colWidths: PDF_COL_WIDTHS_GERAL,
   });
 
-  let inoxHtml = '';
-  if (inoxProcesses.length > 0) {
-    const { data: inoxData, processGroups: inoxGroups } = buildInoxSheetData(inoxProcesses, valorPermutar, cdiHistory);
-    const inoxHeaders = inoxData[0] as string[];
-    const inoxAllRows = inoxData.slice(1) as (string | number | null)[][];
-    const footerRow = inoxAllRows[inoxAllRows.length - 1];
-    const inoxDataRows = inoxAllRows.slice(0, -1);
-    const enrichedInoxRows = enrichInoxRowsWithDataProv(inoxDataRows, dataProvStr);
-    const sumEncargosProv = enrichedInoxRows.reduce((s, r) => s + (typeof r[29] === 'number' ? r[29] : 0), 0);
+  let semEncargosHtml = '';
+  if (semEncargos.length > 0) {
+    const { data: semData, processGroups: semGroups } = buildSemEncargosSheetData(semEncargos, com299List, valorPermutar, cdiHistory);
+    const semHeaders = semData[0] as string[];
+    const semAllRows = semData.slice(1) as (string | number | null)[][];
+    const footerRow = semAllRows[semAllRows.length - 1];
+    const semDataRows = semAllRows.slice(0, -1);
+    const enrichedSemRows = enrichInoxRowsWithDataProv(semDataRows, dataProvStr);
+    const sumEncargosProv = enrichedSemRows.reduce((s, r) => s + (typeof r[30] === 'number' ? r[30] : 0), 0);
     const footerWithSums = [...footerRow];
-    footerWithSums[29] = sumEncargosProv;
-    const inoxRowsWithFooter = [...enrichedInoxRows, footerWithSums];
+    footerWithSums[30] = sumEncargosProv;
+    const semRowsWithFooter = [...enrichedSemRows, footerWithSums];
 
-    const inoxVis = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 22, 23, 24, 25, 26, 27, 28, 29];
-    const inoxFmts: PdfColFmt[] = [
-      'text', 'text', 'text', 'text', 'num4', 'text', 'num2', 'brl', 'brl', 'brl',
-      'dateSerial', 'int', 'text', 'text', 'brl', 'brl',
-      'text', 'text', 'text', 'text', 'text', 'text',
-      'brl', 'brl', 'num6', 'num6', 'num6', 'text', 'int', 'brl',
+    // Visão Geral: colunas 0-7, 8 (Adto Real), 9 (Adto 30%), 10 (Saldo Base), 11-16 (Dt.Fech→VlrNF), 23-30 (Encargos→Prov)
+    const semVis = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28, 29, 30];
+    // fmts indexada por posição original (31 entradas)
+    const semFmts: PdfColFmt[] = [
+      'text', 'text', 'text', 'text', 'num4', 'text', 'num2', 'brl',  // 0-7
+      'brl', 'brl', 'brl',                                               // 8-10 (Adto Real, Adto 30%, Saldo Base)
+      'dateSerial', 'int', 'text', 'text', 'brl', 'brl',                // 11-16 (Dt.Fech → VlrNF)
+      'text', 'text', 'text', 'text', 'text', 'text',                    // 17-22 (ocultas)
+      'brl', 'brl', 'num6', 'num6', 'num6', 'text', 'int', 'brl',       // 23-30 (Encargos Fin → Encargos Prov)
     ];
-    const inoxColWidths = [6, 8, 12, 22, 8, 8, 12, 12, 12, 12, 10, 8, 10, 10, 10, 10, 12, 10, 8, 8, 8, 10, 8, 12];
+    const semColWidths = [6, 8, 12, 22, 8, 8, 12, 12, 12, 12, 12, 10, 8, 10, 10, 10, 10, 12, 10, 8, 8, 8, 10, 8, 12];
 
-    inoxHtml = buildPdfTable(inoxHeaders, inoxRowsWithFooter, inoxFmts, inoxVis, inoxGroups, {
-      orangeOriginalIndices: [27, 28, 29],
+    semEncargosHtml = buildPdfTable(semHeaders, semRowsWithFooter, semFmts, semVis, semGroups, {
+      orangeOriginalIndices: [28, 29, 30],
       footerRows: 1,
-      colWidths: inoxColWidths,
+      colWidths: semColWidths,
     });
   }
 
   let com299Html = '';
   if (com299List.length > 0) {
-    const com299Headers = ['docCod', 'Valor Total', 'Valor Acresc', 'Valor Desc', 'Valor Titulo', 'Valor Pago', 'Valor Permutado', 'Valor em Aberto', 'Valor a Perm'];
+    const com299Headers = ['docCod', 'priCod', 'Dt. Emissão', 'Dt. Baixa', 'Valor Total', 'Valor Acresc', 'Valor Desc', 'Valor Titulo', 'Valor Pago', 'Valor Permutado', 'Valor em Aberto', 'Valor a Perm'];
     const com299Rows: (string | number | null)[][] = com299List.map((r) => [
-      r.docCod, r.mnyBruto, r.mnyAcrescimo, r.mnyDesconto, r.mnyTitValor, r.mnyTitPago, r.mnyTitPermuta, r.mnyTitAberto, r.mnyTitPermutar,
+      r.docCod, r.priCod, formatDateForExport(r.docDtaEmissao), formatDateForExport(r.borDtaFinalizado), r.mnyBruto, r.mnyAcrescimo, r.mnyDesconto, r.mnyTitValor, r.mnyTitPago, r.mnyTitPermuta, r.mnyTitAberto, r.mnyTitPermutar,
     ]);
     const sumRow: (string | number | null)[] = [
-      'TOTAL',
+      'TOTAL', '', '', '',
       com299List.reduce((s, r) => s + r.mnyBruto, 0),
       com299List.reduce((s, r) => s + r.mnyAcrescimo, 0),
       com299List.reduce((s, r) => s + r.mnyDesconto, 0),
@@ -1741,18 +1941,48 @@ export function exportDelaysV2PDF({ processes, cdiHistory, dataProv, valorPermut
       com299List.reduce((s, r) => s + r.mnyTitPermutar, 0),
     ];
     com299Rows.push(sumRow);
-    const com299Fmts: PdfColFmt[] = ['int', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl'];
-    const com299ColWidths = [12, 14, 14, 14, 14, 14, 14, 14, 14];
+    const com299Fmts: PdfColFmt[] = ['int', 'int', 'text', 'text', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl', 'brl'];
+    const com299ColWidths = [12, 12, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14];
     com299Html = buildPdfTable(com299Headers, com299Rows, com299Fmts, undefined, undefined, {
       footerRows: 1,
       colWidths: com299ColWidths,
     });
   }
 
+  // Exposição Cambial (FOB) — saldo base real por duplicata
+  const exposicaoSheetData = buildExposicaoCambialSheetData(processes);
+  const exposicaoHeaders = exposicaoSheetData[0] as string[];
+  const exposicaoRows = exposicaoSheetData.slice(1) as (string | number | null)[][];
+  let exposicaoHtml = '';
+  if (exposicaoRows.length > 0) {
+    // Colunas visíveis no PDF (compactas): excluir impCod (17) e Ação (19)
+    const expVis = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 18];
+    const expFmts: PdfColFmt[] = [
+      'text', 'text', 'text', 'text',  // 0-3 Filial→Cliente
+      'num4', 'text', 'brl',            // 4-6 Taxa, Moeda, Vlr Contrato
+      'text', 'text', 'brl',            // 7-9 NF, DtEmissão, VlrNF
+      'text', 'text', 'text', 'brl', 'text', 'text',  // 10-15 Título→DtBaixa
+      'text', 'int', 'brl', 'int',      // 16-19 Composição, impCod, VlrFOB, Ação
+    ];
+    const expColWidths = [6, 8, 12, 22, 8, 14, 10, 10, 14, 14, 10, 14, 10, 12, 22, 16];
+
+    // Somatório da coluna FOB
+    const totalFOB = exposicaoRows.reduce((s, r) => s + (typeof r[18] === 'number' ? r[18] : 0), 0);
+    const footerRow: (string | number | null)[] = new Array(exposicaoHeaders.length).fill(null);
+    footerRow[0] = 'TOTAL FOB';
+    footerRow[18] = totalFOB;
+    const exposicaoRowsWithFooter = [...exposicaoRows, footerRow];
+
+    exposicaoHtml = buildPdfTable(exposicaoHeaders, exposicaoRowsWithFooter, expFmts, expVis, undefined, {
+      footerRows: 1,
+      colWidths: expColWidths,
+    });
+  }
+
   const emitidoEm = new Date().toLocaleDateString('pt-BR');
   const totalProcessos = processes.length;
   const totalContratos = enrichedRows.length;
-  const totalInox = inoxProcesses.reduce((s, p) => s + (p.contracts?.length ?? 0), 0);
+  const totalSemEnc = semEncargos.reduce((s, p) => s + (p.contracts?.length ?? 0), 0);
 
   const html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -1803,7 +2033,7 @@ tbody tr.footer-row td { background: #FFF3E0; font-weight: 700; }
   </div>
   <div class="hdr-right">
     <div>${totalContratos} Contratos (Visão Geral)</div>
-    ${inoxProcesses.length > 0 ? `<div>${totalInox} Contratos INOX Tech</div>` : ''}
+    ${semEncargos.length > 0 ? `<div>${totalSemEnc} Contratos Sem Encargos</div>` : ''}
   </div>
 </div>
 
@@ -1811,16 +2041,22 @@ tbody tr.footer-row td { background: #FFF3E0; font-weight: 700; }
   <div class="sec-bar"><span>Visão Geral — por Contrato</span><span class="cnt">${totalContratos} registros</span></div>
   ${geralHtml}
 </div>
-${inoxProcesses.length > 0 ? `
+${semEncargos.length > 0 ? `
 <div class="sec pb">
-  <div class="sec-bar"><span>Visão Geral — INOX Tech</span><span class="cnt">${totalInox} registros</span></div>
-  ${inoxHtml}
+  <div class="sec-bar"><span>Sem Encargos — com Adiantamento</span><span class="cnt">${totalSemEnc} registros</span></div>
+  ${semEncargosHtml}
 </div>
 ` : ''}
 ${com299Html ? `
 <div class="sec pb">
-  <div class="sec-bar"><span>com299 — Documentos INOX Tech</span><span class="cnt">${com299List.length} registros</span></div>
+  <div class="sec-bar"><span>com299 — Adiantamentos</span><span class="cnt">${com299List.length} registros</span></div>
   ${com299Html}
+</div>
+` : ''}
+${exposicaoHtml ? `
+<div class="sec pb">
+  <div class="sec-bar"><span>Exposição Cambial — Saldo Base FOB por Título</span><span class="cnt">${exposicaoRows.length} registros</span></div>
+  ${exposicaoHtml}
 </div>
 ` : ''}
 
