@@ -35,9 +35,38 @@ export interface CalculationInput {
 	taxaPtaxDI?: number; // Taxa Ptax na data da D.I. — para cálculo de variação cambial
 }
 
+export interface InputSnapshot {
+	/** CalculationInput original recebido */
+	originalInput: CalculationInput;
+	/** Fonte do CDI utilizado: bcb, conexos ou manual */
+	cdiSource: 'bcb' | 'conexos' | 'manual';
+	/** Valor bruto do CDI da fonte Conexos (ftxNumFatDiario) */
+	cdiConexosRaw?: number;
+	/** Valor CDI efetivamente usado no cálculo (diário) */
+	cdiUsado: number;
+	/** Base de dias usada (360 ou 252) */
+	baseDias: 360 | 252;
+	/** Timestamp ISO da consulta/cálculo */
+	fetchedAt: string;
+	/** Parâmetros de config operacional */
+	configUsado: {
+		filCod: number;
+		impCod: number;
+		ctpCod: number;
+		usnCod: string;
+		calcBase: 360 | 252;
+	};
+	/** Fonte dos movimentos: 'frontend' (input.payments) ou 'conexos' (parcelas) */
+	movimentosSource: 'frontend' | 'conexos';
+}
+
 export interface CalculationResult {
+	/** UUID do registro salvo no Supabase — retornado após persistência */
+	id?: string;
 	processId: string;
+	processoNumero?: string;
 	clienteId: string;
+	clienteNome?: string;
 	totalDisburse: number;
 	custosUSD: {
 		fobTotal: number;
@@ -70,6 +99,11 @@ export interface CalculationResult {
 		valorUSD: number;
 		encargos: number;
 		total: number;
+		/** Campos de breakdown da fórmula (RF-02) */
+		taxaAnualUsada?: number;
+		taxaDiariaUsada?: number;
+		baseDias?: number;
+		formula?: string;
 	}>;
 	totalInterest: number;
 	totalLostInterest?: number;
@@ -77,6 +111,7 @@ export interface CalculationResult {
 	hasExistingInterest?: boolean;
 	payments: Payment[];
 	summary: any;
+	inputSnapshot?: InputSnapshot;
 }
 
 export interface ConexosSubmission {
@@ -86,6 +121,54 @@ export interface ConexosSubmission {
 	encargosFinanceiros: number;
 	taxaFinanceira: number;
 	submittedAt: string;
+}
+
+// ── Memória de Cálculo v2 — payload por item ─────────────────────
+
+/** Item individual de cálculo (contrato ou despesa) */
+export interface CalculationItem {
+	id: string;
+	type: 'contract' | 'expense';
+	label: string;
+	valorBase: number;
+	moeda: string;
+	valorMoedaOriginal?: number;
+	prazoEmDias: number;
+	dataBase: string;
+	dataVencimento: string;
+	cdiAoAno: number;
+	spread: number;
+	taxaEfetiva: number;
+	baseDias: 360 | 252;
+	encargosCalculados: number;
+	formula: string;
+	taxaFechamento?: number | null;
+	taxaPtaxDI?: number | null;
+	taxaSpotDoDia?: number | null;
+	taxaSpotNegociada?: number | null;
+	taxaFutura?: number | null;
+	contasProjeto?: string[];
+	detalhesDespesa?: Array<{
+		contaProjeto: string;
+		encargo: string;
+		dataConversao: string;
+		valorBRL: number;
+	}>;
+}
+
+/** Payload completo enviado pelo frontend (v2) */
+export interface CalculationSavePayload {
+	processId: string;
+	processoNumero: string;
+	clienteId: string;
+	clienteNome: string;
+	refExterna: string;
+	emissionDate: string;
+	items: CalculationItem[];
+	totalEncargos: number;
+	totalValorBase: number;
+	calculadoEm: string;
+	payloadVersion: 2;
 }
 
 // BCB (Banco Central do Brasil) API types

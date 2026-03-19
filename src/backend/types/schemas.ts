@@ -1,8 +1,11 @@
 import { z } from 'zod';
 
 export const CalculationResultSchema = z.object({
+  id: z.string().uuid().optional(),
   processId: z.string(),
+  processoNumero: z.string().optional(),
   clienteId: z.string(),
+  clienteNome: z.string().optional(),
   custosUSD: z.object({
     fobTotal: z.number(),
     freteTotal: z.number(),
@@ -30,6 +33,10 @@ export const CalculationResultSchema = z.object({
     valorUSD: z.number(),
     encargos: z.number(),
     total: z.number(),
+    taxaAnualUsada: z.number().optional(),
+    taxaDiariaUsada: z.number().optional(),
+    baseDias: z.number().optional(),
+    formula: z.string().optional(),
   })),
   summary: z.object({
     numeroMovimentos: z.number(),
@@ -46,4 +53,66 @@ export const CalculationResultSchema = z.object({
   totalCharges: z.number(),
   hasExistingInterest: z.boolean().optional(),
   payments: z.array(z.any()),
+  inputSnapshot: z.object({
+    originalInput: z.any(),
+    cdiSource: z.enum(['bcb', 'conexos', 'manual']),
+    cdiConexosRaw: z.number().optional(),
+    cdiUsado: z.number(),
+    baseDias: z.union([z.literal(360), z.literal(252)]),
+    fetchedAt: z.string(),
+    configUsado: z.object({
+      filCod: z.number(),
+      impCod: z.number(),
+      ctpCod: z.number(),
+      usnCod: z.string(),
+      calcBase: z.union([z.literal(360), z.literal(252)]),
+    }),
+    movimentosSource: z.enum(['frontend', 'conexos']),
+  }).optional(),
+});
+
+// ── v2: Payload por item ─────────────────────────────────────────
+
+export const CalculationItemSchema = z.object({
+  id: z.string(),
+  type: z.enum(['contract', 'expense']),
+  label: z.string(),
+  valorBase: z.number().nonnegative(),
+  moeda: z.string(),
+  valorMoedaOriginal: z.number().optional(),
+  prazoEmDias: z.number().int().nonnegative(),
+  dataBase: z.string(),
+  dataVencimento: z.string(),
+  cdiAoAno: z.number().nonnegative(),
+  spread: z.number().min(0),
+  taxaEfetiva: z.number().nonnegative(),
+  baseDias: z.union([z.literal(360), z.literal(252)]),
+  encargosCalculados: z.number().nonnegative(),
+  formula: z.string(),
+  taxaFechamento: z.number().nullable().optional(),
+  taxaPtaxDI: z.number().nullable().optional(),
+  taxaSpotDoDia: z.number().nullable().optional(),
+  taxaSpotNegociada: z.number().nullable().optional(),
+  taxaFutura: z.number().nullable().optional(),
+  contasProjeto: z.array(z.string()).optional(),
+  detalhesDespesa: z.array(z.object({
+    contaProjeto: z.string(),
+    encargo: z.string(),
+    dataConversao: z.string(),
+    valorBRL: z.number(),
+  })).optional(),
+});
+
+export const CalculationSavePayloadSchema = z.object({
+  processId: z.string(),
+  processoNumero: z.string(),
+  clienteId: z.string(),
+  clienteNome: z.string(),
+  refExterna: z.string(),
+  emissionDate: z.string(),
+  items: z.array(CalculationItemSchema).min(1),
+  totalEncargos: z.number().nonnegative(),
+  totalValorBase: z.number().nonnegative(),
+  calculadoEm: z.string(),
+  payloadVersion: z.literal(2),
 });

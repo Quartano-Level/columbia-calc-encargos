@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getCalculationById, getCalculationsList, getCalculationsSummary } from '../services/supabase.js';
+import { getCalculationById, getCalculationsList, getCalculationsSummary, updateCalculationStatus, saveSubmissionLog } from '../services/supabase.js';
 import { logEvent, boxLog } from '../utils/index.js';
 
 const router = Router();
@@ -7,6 +7,9 @@ const router = Router();
 // POST /calculate
 import { orchestrateCalculation } from '../services/calculation.js';
 import { conexosService } from '../services/conexos.js';
+import { CalculationSavePayloadSchema } from '../types/schemas.js';
+import { saveCalculation } from '../services/supabase.js';
+import { calculationPayloadHash } from '../utils/index.js';
 
 router.post('/', async (req, res) => {
   try {
@@ -15,6 +18,43 @@ router.post('/', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     res.status(422).json({ error: 'Erro ao calcular', details: err.message });
+  }
+});
+
+// POST /calculations/save — salva payload v2 completo (por item) vindo do frontend
+router.post('/save', async (req, res) => {
+  try {
+    const payload = CalculationSavePayloadSchema.parse(req.body);
+
+    // Validar consistência: totalEncargos ≈ Σ items[].encargosCalculados
+    const sumItems = payload.items.reduce((acc, item) => acc + item.encargosCalculados, 0);
+    if (Math.abs(payload.totalEncargos - sumItems) > 0.01) {
+      return res.status(422).json({
+        error: 'Inconsistência no total de encargos',
+        details: `totalEncargos (${payload.totalEncargos}) difere da soma dos itens (${sumItems.toFixed(2)})`,
+      });
+    }
+
+    // Adaptar para saveCalculation() — mapeia campos do v2 para os nomes esperados
+    const calcRow = {
+      ...payload,
+      totalDisburse: payload.totalValorBase,
+      totalInterest: payload.totalEncargos,
+      summary: { calculadoEm: payload.calculadoEm },
+    };
+
+    const { data: saved, error: saveError } = await saveCalculation(calcRow);
+    if (saveError) {
+      return res.status(500).json({ error: 'Erro ao salvar cálculo', details: saveError.message });
+    }
+
+    const row = (saved as any)?.[0];
+    res.json({ id: row?.id, status: 'calculated', version: row?.version ?? 1 });
+  } catch (err: any) {
+    if (err.name === 'ZodError') {
+      return res.status(422).json({ error: 'Payload inválido', details: err.errors });
+    }
+    res.status(500).json({ error: 'Erro ao salvar cálculo', details: err.message });
   }
 });
 
@@ -71,9 +111,9 @@ router.post('/:id/submit', async (req, res) => {
       const row = data as any;
       const payload = row.payload || {};
       processId = row.processo_id || payload.processId || payload.processoId;
-      emissionDate = payload.emissionDate || row.calculated_at || new Date().toISOString();
-      totalInterest = payload.totalInterest || row.total_encargos || 0;
-      taxaDolarFiscal = payload.cambio?.taxaDolarFiscal || 1;
+      emissionDate = req.body.emissionDate || payload.emissionDate || row.calculated_at || new Date().toISOString();
+      totalInterest = Number(req.body.totalInterest) || payload.totalInterest || 0;
+      taxaDolarFiscal = 1; // encargosCalculados já em BRL — sem conversão cambial aqui
       calculationId = data.id;
     } else if (req.body && req.body.totalInterest) {
       // Caminho 2: dados enviados diretamente pelo frontend (calculador)
@@ -88,18 +128,28 @@ router.post('/:id/submit', async (req, res) => {
       });
     }
 
-    boxLog('Submitting to Conexos', { processId, emissionDate, totalInterest, taxaDolarFiscal });
+    const submitPayload = { processId, emissionDate, totalInterest, taxaDolarFiscal };
+    boxLog('Submitting to Conexos', submitPayload);
 
-    await conexosService.submitExpense({
-      processId,
-      emissionDate,
-      totalInterest,
-      taxaDolarFiscal
+    const conexosResponse = await conexosService.submitExpense(submitPayload);
+
+    // RF-04: Atualizar status no banco após submissão com sucesso
+    if (calculationId) {
+      await updateCalculationStatus(calculationId, 'submitted');
+    }
+
+    // RF-05: Trilha de auditoria da submissão
+    await saveSubmissionLog({
+      calculationId: calculationId || undefined,
+      processoId: String(processId),
+      requestPayload: submitPayload,
+      responsePayload: conexosResponse ?? {},
+      responseStatus: 200,
     });
 
     logEvent('calculation_submitted', { calculationId: calculationId || processId });
 
-    res.json({ status: 'submitted', calculationId: calculationId || processId });
+    res.json({ status: 'submitted', calculationId: calculationId || processId, conexosResponse });
   } catch (err: any) {
     boxLog('Submission Error', { error: err.message, data: err.response?.data });
     res.status(500).json({ error: 'Erro ao submeter cálculo', details: err.message });
