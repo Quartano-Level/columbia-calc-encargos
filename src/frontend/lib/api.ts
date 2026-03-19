@@ -27,6 +27,22 @@ export async function fetchCalculation(id: string): Promise<any> {
 
 
 
+export interface Filial {
+	filCod: number;
+	filDesNome: string;
+	ufEspSigla: string;
+}
+
+export async function fetchFiliais(): Promise<Filial[]> {
+	const response = await fetch(`${API_BASE_URL}/filiais`, {
+		method: "GET",
+		headers: { "Accept": "application/json" },
+	});
+	if (!response.ok) throw new Error(`API Error: ${response.status}`);
+	const data = await response.json();
+	return data?.data || [];
+}
+
 export async function fetchProcesses(filters?: { priCod?: string; refExterna?: string }): Promise<Process[]> {
 	const params = new URLSearchParams();
 	if (filters?.priCod) params.append('priCod', filters.priCod);
@@ -66,19 +82,39 @@ export interface ProcessWithContract extends Process {
 
 export interface ProcessesWithContractsResponse {
 	processes: ProcessWithContract[];
-	contracts: any[];
-	totalProcesses: number;
-	totalContracts: number;
+	totalCount: number;
+	page: number;
+	pageSize: number;
+	contracts?: any[];
+	totalProcesses?: number;
+	totalContracts?: number;
 }
 
-export async function fetchProcessesWithContracts(): Promise<ProcessesWithContractsResponse> {
-	const response = await fetch(`${API_BASE_URL}/processes/with-contracts`, {
+export async function fetchProcessesWithContracts(opts?: {
+	filCod?: number;
+	page?: number;
+	pageSize?: number;
+	clientName?: string;
+	refExterna?: string;
+}): Promise<ProcessesWithContractsResponse> {
+	const params = new URLSearchParams();
+	if (opts?.filCod) params.append('filCod', String(opts.filCod));
+	if (opts?.page) params.append('page', String(opts.page));
+	if (opts?.pageSize) params.append('pageSize', String(opts.pageSize));
+	if (opts?.clientName) params.append('clientName', opts.clientName);
+	if (opts?.refExterna) params.append('refExterna', opts.refExterna);
+	const qs = params.toString();
+	const url = qs
+		? `${API_BASE_URL}/processes/with-contracts?${qs}`
+		: `${API_BASE_URL}/processes/with-contracts`;
+
+	const response = await fetch(url, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
 	});
 	if (!response.ok) throw new Error(`API Error: ${response.status}`);
 	const data = await response.json();
-	return data?.data || { processes: [], contracts: [], totalProcesses: 0, totalContracts: 0 };
+	return data?.data || { processes: [], totalCount: 0, page: 1, pageSize: 20 };
 }
 
 /** TODOS os processos (sem filtro de contratos) - para exportação da planilha */

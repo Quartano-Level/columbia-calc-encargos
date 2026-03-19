@@ -2,8 +2,9 @@
 
 import { useState, ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Menu, FileText, Clock, Settings, LogOut, User, AlertTriangle } from "lucide-react";
+import { Menu, FileText, Clock, Settings, LogOut, User, AlertTriangle, Building2 } from "lucide-react";
 import { useAuth } from "./auth-provider";
+import { useFilial } from "./filial-provider";
 import { MicrosoftLoginButton } from "./microsoft-login-button";
 
 interface AppLayoutProps {
@@ -15,6 +16,14 @@ export function AppLayout({ children }: AppLayoutProps) {
 	const router = useRouter();
 	const pathname = usePathname();
 	const { user, signOut, loading } = useAuth();
+	const { filiais, selectedFilCod, setSelectedFilCod, loading: filiaisLoading } = useFilial();
+
+	/** Extrai nome curto da filial: "COLUMBIA TRADING S/A - ITAJAÍ/SC" → "2 | SC - Itajaí" */
+	function shortFilialName(filCod: number, filDesNome: string, ufEspSigla: string): string {
+		const match = filDesNome.match(/- (.+?)\//);
+		const city = match ? match[1].trim() : ufEspSigla;
+		return `${filCod} | ${ufEspSigla} - ${city.charAt(0).toUpperCase()}${city.slice(1).toLowerCase()}`;
+	}
 
 	const isActive = (path: string) => {
 		if (path === "/") {
@@ -48,6 +57,22 @@ export function AppLayout({ children }: AppLayoutProps) {
 							<Menu size={24} className="text-white" />
 						</button>
 						<h1 className="text-white text-xl font-bold">Calculadora de Encargos Financeiros</h1>
+						{!filiaisLoading && filiais.length > 0 && (
+							<div className="flex items-center gap-2 ml-4">
+								<Building2 size={16} className="text-white/70" />
+								<select
+									value={selectedFilCod}
+									onChange={(e) => setSelectedFilCod(Number(e.target.value))}
+									className="bg-white/10 text-white text-sm font-medium border border-white/20 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-white/30 cursor-pointer"
+								>
+									{filiais.map((f) => (
+										<option key={f.filCod} value={f.filCod} className="text-gray-800">
+											{shortFilialName(f.filCod, f.filDesNome, f.ufEspSigla)}
+										</option>
+									))}
+								</select>
+							</div>
+						)}
 					</div>
 					{!loading && (
 						<div className="flex items-center gap-3">

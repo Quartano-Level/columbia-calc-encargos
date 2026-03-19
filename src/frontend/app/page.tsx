@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { fetchProcessesWithContracts, fetchBCBLatestCDI, fetchCalculationsSummary, MonthlySummary } from "@/lib/api";
+import { useFilial } from "@/components/filial-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
@@ -10,7 +11,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AuthErrorAlert } from "@/components/auth-error-alert";
 import { ProtectedRoute } from "@/components/protected-route";
 import { KpiCard } from "@/components/kpi-card";
-import { Search, FileText, DollarSign, ChevronRight, AlertTriangle, TrendingDown, FileDown, BarChart2, ChevronDown, CheckCircle2 } from "lucide-react";
+import { Search, FileText, DollarSign, ChevronRight, AlertTriangle, TrendingDown, FileDown, BarChart2, ChevronDown, ChevronLeft, CheckCircle2 } from "lucide-react";
 import { fetchProcessesForExportV2, fetchBCBCDIHistory, fetchValorPermutar, fetchCom299List } from "@/lib/api";
 import { exportDelaysXLSXV2, exportDelaysV2PDF } from "@/lib/csv";
 import {
@@ -73,13 +74,18 @@ export default function Home() {
 	const [calculatedProcessesCount, setCalculatedProcessesCount] = useState<number>(0);
 	const [totalLostInterestGlobal, setTotalLostInterestGlobal] = useState<number>(0);
 	const [delayedProcessesCount, setDelayedProcessesCount] = useState<number>(0);
-	const [filteredProcesses, setFilteredProcesses] = useState<ProcessTableRow[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [kpiLoading, setKpiLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [authError, setAuthError] = useState<string | null>(null);
-	const [searchTerm, setSearchTerm] = useState("");
 	const [sortBy, setSortBy] = useState<string>("recent");
+
+	// Paginação e filtros backend
+	const [page, setPage] = useState(1);
+	const [pageSize, setPageSize] = useState(20);
+	const [totalCount, setTotalCount] = useState(0);
+	const [clientNameFilter, setClientNameFilter] = useState("");
+	const [refExternaFilter, setRefExternaFilter] = useState("");
 
 	// KPI extras
 	const [cdiAtual, setCdiAtual] = useState<number | null>(null);
@@ -96,9 +102,9 @@ export default function Home() {
 	const [dataProv, setDataProv] = useState<string>(() => new Date().toISOString().split("T")[0]);
 	const router = useRouter();
 	const searchParams = useSearchParams();
+	const { selectedFilCod } = useFilial();
 
 	useEffect(() => {
-		loadProcesses();
 		loadKpiExtras();
 
 		const errorParam = searchParams.get("error");
@@ -110,8 +116,8 @@ export default function Home() {
 	}, [searchParams, router]);
 
 	useEffect(() => {
-		filterAndSortProcesses();
-	}, [processes, searchTerm, sortBy]);
+		loadProcesses();
+	}, [page, pageSize, selectedFilCod]);
 
 	async function loadKpiExtras() {
 		setKpiLoading(true);
@@ -245,7 +251,15 @@ export default function Home() {
 			setLoading(true);
 			setError(null);
 
-			const response = await fetchProcessesWithContracts();
+			const response = await fetchProcessesWithContracts({
+				filCod: selectedFilCod,
+				page,
+				pageSize,
+				clientName: clientNameFilter || undefined,
+				refExterna: refExternaFilter || undefined,
+			});
+
+			setTotalCount(response.totalCount || 0);
 
 			// Calcular juros perdidos por atrasos a partir dos dados de pagamentos
 			const cdiDiario = 0.045; // fallback; idealmente viria do CDI carregado
@@ -301,28 +315,30 @@ export default function Home() {
 		}
 	}
 
-	function filterAndSortProcesses() {
-		let filtered = [...processes];
-		if (searchTerm) {
-			filtered = filtered.filter(
-				(p) =>
-					p.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
-					p.processNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-					p.clientName.toLowerCase().includes(searchTerm.toLowerCase())
-			);
-		}
-		filtered.sort((a, b) => {
-			switch (sortBy) {
-				case "recent":
-					return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-				case "oldest":
-					return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-				default:
-					return 0;
-			}
-		});
-		setFilteredProcesses(filtered);
+	function handleSearch() {
+		setPage(1);
+		loadProcesses();
 	}
+
+	function handleClearFilters() {
+		setClientNameFilter("");
+		setRefExternaFilter("");
+		setPage(1);
+		// loadProcesses will be triggered by page change via useEffect
+	}
+
+	const sortedProcesses = [...processes].sort((a, b) => {
+		switch (sortBy) {
+			case "recent":
+				return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+			case "oldest":
+				return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+			default:
+				return 0;
+		}
+	});
+
+	const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
 	const toggleRow = (id: string) => {
 		const newExpanded = new Set(expandedRows);
@@ -476,7 +492,7 @@ export default function Home() {
 						icon={AlertTriangle}
 						loading={loading}
 						variant={delayedProcessesCount > 0 ? "warning" : "default"}
-						subtitle={`De ${processes.length} processos`}
+						subtitle={`De ${totalCount} processos`}
 						invertTrend
 					/>
 					<KpiCard
@@ -553,19 +569,47 @@ export default function Home() {
 					)}
 				</div>
 
-				{/* Filtros */}
+				{/* Filtros e Paginação */}
 				<div className="bg-white rounded-xl border border-gray-200 p-3 mb-4 shadow-sm">
-					<div className="flex items-center gap-3">
-						<div className="flex-1 relative">
-							<Search className="absolute left-3 top-2 text-gray-400" size={16} />
+					<div className="flex flex-wrap items-end gap-3">
+						<div className="flex-1 min-w-[180px]">
+							<label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Nome do Cliente</label>
 							<Input
-								placeholder="Buscar por número ou cliente..."
-								className="pl-9 h-9 text-sm"
-								value={searchTerm}
-								onChange={(e) => setSearchTerm(e.target.value)}
+								placeholder="Ex: Columbia, Bunge..."
+								className="h-9 text-sm"
+								value={clientNameFilter}
+								onChange={(e) => setClientNameFilter(e.target.value)}
+								onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+							/>
+						</div>
+						<div className="flex-1 min-w-[180px]">
+							<label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">Referência Externa</label>
+							<Input
+								placeholder="Ex: IMP-2025..."
+								className="h-9 text-sm"
+								value={refExternaFilter}
+								onChange={(e) => setRefExternaFilter(e.target.value)}
+								onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
 							/>
 						</div>
 						<div className="flex items-center gap-2">
+							<Button
+								onClick={handleSearch}
+								className="h-9 px-4 bg-[#337ab7] hover:bg-blue-700 text-white text-xs font-bold"
+							>
+								<Search size={14} className="mr-1.5" /> Pesquisar
+							</Button>
+							{(clientNameFilter || refExternaFilter) && (
+								<Button
+									variant="outline"
+									onClick={handleClearFilters}
+									className="h-9 px-3 text-xs font-bold"
+								>
+									Limpar
+								</Button>
+							)}
+						</div>
+						<div className="flex items-center gap-2 ml-auto">
 							<span className="text-gray-500 text-xs font-bold uppercase tracking-tight">Ordenar:</span>
 							<select
 								className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-gray-50 h-9 font-medium"
@@ -574,6 +618,16 @@ export default function Home() {
 							>
 								<option value="recent">Mais recente</option>
 								<option value="oldest">Mais antigo</option>
+							</select>
+							<span className="text-gray-500 text-xs font-bold uppercase tracking-tight ml-2">Exibir:</span>
+							<select
+								className="border border-gray-200 rounded-lg px-2 py-1 text-xs bg-gray-50 h-9 font-medium"
+								value={pageSize}
+								onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+							>
+								<option value={20}>20</option>
+								<option value={50}>50</option>
+								<option value={100}>100</option>
 							</select>
 						</div>
 					</div>
@@ -595,7 +649,7 @@ export default function Home() {
 							</tr>
 						</thead>
 						<tbody>
-							{filteredProcesses.map((process) => {
+							{sortedProcesses.map((process) => {
 								const isExpanded = expandedRows.has(process.id);
 								return (
 									<React.Fragment key={process.id}>
@@ -769,11 +823,41 @@ export default function Home() {
 				</div>
 
 				{/* Empty State */}
-				{filteredProcesses.length === 0 && (
+				{sortedProcesses.length === 0 && (
 					<div className="bg-white rounded-xl border border-gray-200 p-8 text-center mt-4">
 						<p className="text-gray-500 text-sm">
-							{searchTerm ? "Nenhum processo encontrado com os filtros aplicados" : "Nenhum processo carregado"}
+							{(clientNameFilter || refExternaFilter) ? "Nenhum processo encontrado com os filtros aplicados" : "Nenhum processo carregado"}
 						</p>
+					</div>
+				)}
+
+				{/* Paginação */}
+				{totalCount > 0 && (
+					<div className="flex items-center justify-between mt-4 px-1">
+						<p className="text-xs text-gray-500">
+							Página <span className="font-bold">{page}</span> de <span className="font-bold">{totalPages}</span>
+							{" "}({totalCount} processos)
+						</p>
+						<div className="flex items-center gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={page <= 1}
+								onClick={() => setPage(p => Math.max(1, p - 1))}
+								className="h-8 px-3 text-xs"
+							>
+								<ChevronLeft size={14} className="mr-1" /> Anterior
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								disabled={page >= totalPages}
+								onClick={() => setPage(p => p + 1)}
+								className="h-8 px-3 text-xs"
+							>
+								Próximo <ChevronRight size={14} className="ml-1" />
+							</Button>
+						</div>
 					</div>
 				)}
 			</div>

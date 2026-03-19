@@ -3,6 +3,7 @@ import { DM_Sans } from 'next/font/google'
 import { Analytics } from '@vercel/analytics/next'
 import { AppLayout } from '@/components/app-layout'
 import { AuthProvider } from '@/components/auth-provider'
+import { FilialProvider } from '@/components/filial-provider'
 import { Toaster } from '@/components/ui/toaster'
 import './globals.css'
 
@@ -23,7 +24,9 @@ export default function RootLayout({
     <html lang="pt-BR">
       <body className={`${dmSans.className} antialiased`}>
         <AuthProvider>
-          <AppLayout>{children}</AppLayout>
+          <FilialProvider>
+            <AppLayout>{children}</AppLayout>
+          </FilialProvider>
         </AuthProvider>
         <Analytics />
         <Toaster />
