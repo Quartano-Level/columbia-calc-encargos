@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { calculationPayloadHash } from '../utils/index.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -13,20 +14,51 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 });
 
-// Exemplo: salvar cálculo — mapear corretamente para colunas do banco
+// Salvar cálculo — auto-incrementa version por processo_id (RF-06)
 export async function saveCalculation(calculation: any, externalId?: string) {
-  const row = {
-    processo_id: String(calculation.processId ?? calculation.processoId ?? ''),
+  const processoId = String(calculation.processId ?? calculation.processoId ?? '');
+
+  // RF-06: Buscar versão anterior para auto-incrementar
+  let version = 1;
+  let previousCalculationId: string | null = null;
+  try {
+    const { data: prev } = await supabase
+      .from('calculations')
+      .select('id, version')
+      .eq('processo_id', processoId)
+      .order('version', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (prev) {
+      version = (prev.version ?? 1) + 1;
+      previousCalculationId = prev.id;
+    }
+  } catch (_) { /* primeira vez — version = 1 */ }
+
+  const payloadObj = { ...calculation, _externalId: externalId };
+
+  // Colunas base (sempre existem — migration 20251222)
+  const baseRow = {
+    processo_id: processoId,
     cliente_id: calculation.clienteId ?? null,
-    // guardar payload completo como jsonb (inclui movimentos, summary, etc.)
-    payload: { ...calculation, _externalId: externalId },
-    total_desembolso: Number(calculation.totalDisburse ?? calculation.summary?.totalDesembolso ?? 0) || 0,
-    total_encargos: Number(calculation.totalCharges ?? 0) || 0,
+    payload: payloadObj,
+    total_desembolso: Number(calculation.totalDisburse ?? 0) || 0,
+    total_encargos: Number(calculation.totalInterest ?? 0) || 0,
     calculated_at: calculation.summary?.calculadoEm ? new Date(calculation.summary.calculadoEm) : new Date(),
     status: calculation.status ?? 'calculated',
+    version,
+    processo_numero: calculation.processoNumero ?? null,
+    cliente_nome: calculation.clienteNome ?? null,
   };
 
-  return supabase.from('calculations').insert([row]);
+  // Tentativa completa — inclui colunas das migrations RF-05/RF-06/RF-10
+  const fullRow = {
+    ...baseRow,
+    previous_calculation_id: previousCalculationId,
+    payload_hash: calculationPayloadHash(payloadObj),
+  };
+
+  return supabase.from('calculations').insert([fullRow]).select();
 }
 
 // Exemplo: buscar cálculo — aceita tanto `id` (uuid) quanto `processo_id` (string/número)
@@ -52,6 +84,35 @@ export async function getCalculationById(id: string) {
   } catch (err: any) {
     return { data: null, error: err };
   }
+}
+
+export async function updateCalculationStatus(id: string, status: string) {
+  const updates: Record<string, any> = { status, updated_at: new Date().toISOString() };
+  if (status === 'submitted') updates.submitted_at = new Date().toISOString();
+  return supabase
+    .from('calculations')
+    .update(updates)
+    .eq('id', id);
+}
+
+export async function saveSubmissionLog(log: {
+  calculationId?: string;
+  processoId: string;
+  submittedBy?: string;
+  requestPayload: Record<string, any>;
+  responsePayload?: Record<string, any>;
+  responseStatus?: number;
+  conexosRecordId?: string;
+}) {
+  return supabase.from('calculation_submissions').insert([{
+    calculation_id: log.calculationId ?? null,
+    processo_id: log.processoId,
+    submitted_by: log.submittedBy ?? null,
+    request_payload: log.requestPayload,
+    response_payload: log.responsePayload ?? null,
+    response_status: log.responseStatus ?? null,
+    conexos_record_id: log.conexosRecordId ?? null,
+  }]);
 }
 
 export async function getCalculationsList({ limit = 100, processId }: { limit?: number; processId?: string } = {}) {

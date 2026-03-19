@@ -1,11 +1,11 @@
-import { CalculationResult, CalculationInput, Payment } from '../types/index.js';
+import { CalculationResult, CalculationInput, InputSnapshot, Payment } from '../types/index.js';
 import { CalculationResultSchema } from '../types/schemas.js';
 import { conexosService } from './conexos.js';
 import { cdiCalculatorService } from './cdi-calculator.js';
 import { calcEncargosSimples } from './encargos-calculator.js';
 import { config } from '../config.js';
 import { saveCalculation, getCalculationById } from './supabase.js';
-import { calculationInputHash, logEvent, boxLog } from '../utils/index.js';
+import { calculationInputHash, logEvent, boxLog, DEBUG_VERBOSE } from '../utils/index.js';
 
 export async function orchestrateCalculation(input: CalculationInput): Promise<CalculationResult> {
   boxLog('Service: orchestrateCalculation Input', input);
@@ -28,13 +28,18 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
   // 2. Normalizar e calcular principais campos
   const processoId = String(process?.imcCod ?? input.processId ?? '');
   const clienteId = String(process?.cliCod ?? (input as any).clienteId ?? 'N/A');
+  const processoNumero = String(process?.imcNumNumero ?? '');
+  const clienteNome = String(process?.dpeNomPessoaCons || process?.dpeNomPessoa || '');
   const fobTotal = Number(process?.vlrMneg) || 0;
   const freteTotal = Number(process?.freteTotal) || 0;
   const seguroTotal = Number(process?.seguroTotal) || 0;
   const cifTotal = fobTotal + freteTotal + seguroTotal;
 
   // CDI: PRIORIZAR INPUT MANUAL (CDI Diário)
-  const cdiDiario = input.taxaCDI !== undefined ? Number(input.taxaCDI) : (Number(cdiList?.[0]?.ftxNumFatDiario) || 0);
+  const cdiConexosRaw = Number(cdiList?.[0]?.ftxNumFatDiario) || 0;
+  const cdiFromInput = input.taxaCDI !== undefined && Number(input.taxaCDI) > 0;
+  const cdiDiario = cdiFromInput ? Number(input.taxaCDI) : cdiConexosRaw;
+  const cdiSource: InputSnapshot['cdiSource'] = cdiFromInput ? 'manual' : 'conexos';
   const txSpotCompra = Number(input.taxaConexos) || 0;
 
   // Mapear parcelas para movimentos
@@ -46,15 +51,23 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
 
   // PRIORIZAR PAGAMENTOS ENVIADOS PELO FRONTEND
   const inputPayments = Array.isArray(input.payments) && input.payments.length > 0 ? input.payments : null;
+  const movimentosSource: InputSnapshot['movimentosSource'] = inputPayments ? 'frontend' : 'conexos';
   const rawSource = inputPayments || parcelas || [];
+
+  const taxaAnualCalc = cdiDiario * config.calcBase;
+  const taxaDiariaCalc = taxaAnualCalc / config.calcBase / 100; // = cdiDiario / 100
 
   const movimentos = rawSource.map((p: any) => {
     const valorUSD = Number(p.pipMnyValor || p.valorUSD || p.value || 0) || 0;
     const dias = Number(p.pipNumDiasVcto || p.diasCorridos || p.days || 0) || 0;
 
     // Fórmula: Juros = Valor × (taxaAnual / base / 100) × Dias
-    // cdiDiario é a taxa diária em % do Conexos (ex: 0.0521) → anualizada = cdiDiario × base
-    const encargos = calcEncargosSimples(valorUSD, cdiDiario * config.calcBase, dias || 0, config.calcBase);
+    const encargos = calcEncargosSimples(valorUSD, taxaAnualCalc, dias || 0, config.calcBase);
+
+    // RF-02: Breakdown de fórmula
+    const fmtVal = valorUSD.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmtEnc = encargos.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const formula = `${fmtVal} × (${taxaAnualCalc.toFixed(4)} / ${config.calcBase} / 100) × ${dias} = ${fmtEnc}`;
 
     return {
       data: toDateIso(p.pipDtaVcto || p.data || p.dtaVcto || p.paymentDate || p.dta),
@@ -64,6 +77,10 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
       valorUSD: valorUSD,
       encargos: encargos,
       total: valorUSD + encargos,
+      taxaAnualUsada: taxaAnualCalc,
+      taxaDiariaUsada: taxaDiariaCalc,
+      baseDias: config.calcBase,
+      formula,
     };
   });
 
@@ -106,7 +123,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     const titleLostInterest = processedDischarges.reduce((acc, d) => acc + d.lostInterest, 0);
 
     if (titleLostInterest > 0 && title.priCod === 82) {
-      if (process.env.DEBUG_VERBOSE === '1') console.log(`[Calculation DEBUG 82] Juros Perdidos detectados no título ${title.titEspNumero || title.docCod}: R$ ${titleLostInterest.toFixed(2)}`);
+      if (DEBUG_VERBOSE) console.log(`[Calculation DEBUG 82] Juros Perdidos detectados no título ${title.titEspNumero || title.docCod}: R$ ${titleLostInterest.toFixed(2)}`);
     }
 
     return {
@@ -141,7 +158,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     }))
     : [];
 
-  if (process.env.DEBUG_VERBOSE === '1') console.log(`[orchestrateCalculation] Despesas mapped:`, despesasMap.length);
+  if (DEBUG_VERBOSE) console.log(`[orchestrateCalculation] Despesas mapped:`, despesasMap.length);
 
   // Verificar se já existe lançamento de "ENCARGOS FINANCEIROS"
   const hasExistingInterest = despesasMap.some(d =>
@@ -149,11 +166,13 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     (d.tipo || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
   );
 
-  if (process.env.DEBUG_VERBOSE === '1') console.log(`[orchestrateCalculation] hasExistingInterest:`, hasExistingInterest);
+  if (DEBUG_VERBOSE) console.log(`[orchestrateCalculation] hasExistingInterest:`, hasExistingInterest);
 
   const result: CalculationResult = {
     processId: processoId,
+    processoNumero,
     clienteId,
+    clienteNome,
     custosUSD: { fobTotal, freteTotal, seguroTotal, cifTotal },
     cambio: {
       cdiAM: cdiDiario,
@@ -176,7 +195,7 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     movimentos,
     summary: {
       numeroMovimentos: movimentos.length,
-      totalDesembolso: totalDisburse + totalInterest,
+      totalDesembolso: totalDisburse,
       calculadoEm: new Date().toISOString(),
       calculationDate: new Date().toISOString(),
       taxaCDI: cdiDiario,
@@ -189,6 +208,22 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
     totalCharges: totalDisburse + totalInterest,
     hasExistingInterest: hasExistingInterest,
     payments: enrichedPayments,
+    inputSnapshot: {
+      originalInput: input,
+      cdiSource,
+      cdiConexosRaw,
+      cdiUsado: cdiDiario,
+      baseDias: config.calcBase,
+      fetchedAt: new Date().toISOString(),
+      configUsado: {
+        filCod: config.conexos.filCod,
+        impCod: config.conexos.impCod,
+        ctpCod: config.conexos.ctpCod,
+        usnCod: config.conexos.usnCod,
+        calcBase: config.calcBase,
+      },
+      movimentosSource,
+    },
   };
 
   boxLog('Calculation Final Result', result);
@@ -196,11 +231,16 @@ export async function orchestrateCalculation(input: CalculationInput): Promise<C
   // 3. Validar
   CalculationResultSchema.parse(result);
 
-  // 4. Persistir no Supabase
-  await saveCalculation(result, calculationInputHash(input));
+  // 4. Persistir no Supabase e capturar UUID gerado
+  const { data: saved, error: saveError } = await saveCalculation(result, calculationInputHash(input));
+  if (saveError) {
+    console.error('[orchestrateCalculation] Erro ao persistir cálculo no Supabase:', saveError.message);
+    throw new Error(`Falha ao salvar cálculo: ${saveError.message}`);
+  }
+  const savedId: string | undefined = (saved as any)?.[0]?.id ?? undefined;
 
   // 5. Logging
-  logEvent('calculation_created', { processId: result.processId });
+  logEvent('calculation_created', { processId: result.processId, calculationId: savedId });
 
-  return result;
+  return { ...result, id: savedId };
 }

@@ -6,6 +6,12 @@ export function calculationInputHash(input: any): string {
   return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
 }
 
+/** RF-10: Hash SHA-256 do payload canônico (chaves ordenadas) para integridade */
+export function calculationPayloadHash(payload: any): string {
+  const canonical = JSON.stringify(payload, Object.keys(payload).sort());
+  return crypto.createHash('sha256').update(canonical).digest('hex');
+}
+
 // Função para logging estruturado
 export function logEvent(event: string, data: any) {
   // TODO: Integrar com serviço de logging real
