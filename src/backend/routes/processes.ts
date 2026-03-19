@@ -81,23 +81,24 @@ router.get('/for-export', async (req, res) => {
   }
 });
 
-// GET /processes/with-contracts - processos que possuem contratos de câmbio
-router.get('/with-contracts', async (_req, res) => {
+// GET /processes/with-contracts - processos paginados com enriquecimento (contratos, despesas, títulos)
+router.get('/with-contracts', async (req, res) => {
   try {
-    const result = await conexosService.getProcessesWithContractsEnriched();
-    const visibleProcesses = (result.processes || []).filter((p: any) => !p.hasFinalizedInvoice);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const page = req.query.page ? parseInt(String(req.query.page), 10) : 1;
+    const pageSize = req.query.pageSize ? parseInt(String(req.query.pageSize), 10) : 20;
+    const clientName = req.query.clientName ? String(req.query.clientName) : undefined;
+    const refExterna = req.query.refExterna ? String(req.query.refExterna) : undefined;
+
+    const result = await conexosService.getProcessesPaginated({ filCod, page, pageSize, clientName, refExterna });
     res.json({
       source: 'conexos',
-      data: {
-        ...result,
-        processes: visibleProcesses,
-        totalProcesses: visibleProcesses.length,
-      },
+      data: result,
     });
   } catch (err: any) {
     console.error('[processes/with-contracts] Error:', err.message);
     res.status(502).json({
-      error: 'Erro ao buscar processos com contratos',
+      error: 'Erro ao buscar processos',
       details: err.message,
     });
   }

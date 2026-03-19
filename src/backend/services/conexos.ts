@@ -2,10 +2,18 @@ import axios, { AxiosInstance } from 'axios';
 import { boxLog, DEBUG_VERBOSE } from '../utils/index.js';
 import { config } from '../config.js';
 
+interface Filial {
+  filCod: number;
+  filDesNome: string;
+  ufEspSigla: string;
+  filVldStatus?: number;
+}
+
 class ConexosService {
   private sid: string | null = null;
   private sidExpiresAt: number | null = null;
   private client: AxiosInstance;
+  private filiais: Filial[] = [];
 
   constructor() {
     this.client = axios.create({
@@ -46,6 +54,11 @@ class ConexosService {
       if (!sid) throw new Error('Falha ao obter sid do login Conexos');
       this.sid = sid;
       if (DEBUG_VERBOSE) console.log('[Conexos] Login bem sucedido, sid armazenado');
+      // Capturar filiais do response de login
+      if (Array.isArray(resp.data?.filiais)) {
+        this.filiais = resp.data.filiais;
+        if (DEBUG_VERBOSE) console.log(`[Conexos] ${this.filiais.length} filiais capturadas do login`);
+      }
       // Opcional: definir validade do sid (ex: 30min)
       this.sidExpiresAt = Date.now() + 25 * 60 * 1000;
     } catch (err: any) {
@@ -83,6 +96,10 @@ class ConexosService {
 
   getAuthHeaders() {
     return this.sid ? { Cookie: `sid=${this.sid}` } : {};
+  }
+
+  getFiliais(): Filial[] {
+    return this.filiais;
   }
 
   /**
@@ -940,6 +957,185 @@ class ConexosService {
       contracts,
       totalProcesses: processesWithContracts.length,
       totalContracts: contracts.length,
+    };
+  }
+
+  /**
+   * Busca processos paginados diretamente do Conexos (imp021) com filtros nativos,
+   * sem depender de contratos (exibe todos os processos da filial).
+   * Enriquece apenas os processos da página atual com contratos, despesas, títulos, etc.
+   */
+  async getProcessesPaginated(opts: {
+    filCod?: number;
+    page?: number;
+    pageSize?: number;
+    clientName?: string;
+    refExterna?: string;
+  } = {}) {
+    await this.ensureSid();
+
+    const filCod = opts.filCod ?? config.conexos.filCod;
+    const page = opts.page ?? 1;
+    const pageSize = opts.pageSize ?? 20;
+
+    if (DEBUG_VERBOSE) console.log(`\n========== getProcessesPaginated (filCod=${filCod}, page=${page}, pageSize=${pageSize}) ==========`);
+
+    // 1. Buscar processos com paginação e filtros nativos do Conexos
+    const filterList: Record<string, any> = { "priVldStatus#IN": ["1"] };
+    if (opts.clientName) {
+      filterList["dpeNomPessoa#LIKE"] = `%${opts.clientName}%`;
+    }
+    if (opts.refExterna) {
+      filterList["priEspRefcliente#LIKE"] = `%${opts.refExterna}%`;
+    }
+
+    const body = {
+      fieldList: [],
+      filterList,
+      pageNumber: page,
+      pageSize,
+      serviceName: "imp021",
+      orderList: { orderList: [{ propertyName: "priCod", order: "desc" }] },
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    let rows: any[] = [];
+    let totalCount = 0;
+
+    try {
+      const resp = await this.client.post('/imp021/list', body, { headers });
+      rows = resp.data?.rows || [];
+      totalCount = resp.data?.count ?? rows.length;
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post('/imp021/list', body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        rows = retryResp.data?.rows || [];
+        totalCount = retryResp.data?.count ?? rows.length;
+      } else {
+        throw err;
+      }
+    }
+
+    if (DEBUG_VERBOSE) console.log(`[1] Processos retornados: ${rows.length} de ${totalCount} total`);
+
+    // 2. Enriquecer apenas os processos da página atual (em batches de 20)
+    const BATCH_SIZE = 20;
+    const enrichedProcesses: any[] = [];
+
+    for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+      const batch = rows.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(batch.map(async (proc: any) => {
+        const priCod = Number(proc.priCod);
+
+        // Busca dados independentes em paralelo
+        const [contracts, financialTitles, despesas, invCod, hasFinalizedInvoice] = await Promise.all([
+          this.getContractsByProcess(priCod).catch(() => []),
+          this.getFinancialTitlesPsq015(priCod).catch(() => []),
+          this.getDespesasByProcessId(String(priCod)).catch(() => []),
+          this.getInvoiceCodeLog009(priCod).catch(() => null),
+          this.hasFinalizedInvoiceByProcess(priCod).catch(() => false),
+        ]);
+
+        // Busca detalhes (incoterm) se tiver invCod
+        let detailedData = null;
+        if (invCod) {
+          try {
+            const log009Data = await this.getProcessDetailsLog009(invCod);
+            detailedData = Array.isArray(log009Data) && log009Data.length > 0
+              ? log009Data[0]
+              : (!Array.isArray(log009Data) ? log009Data : null);
+          } catch { /* ignore */ }
+        }
+
+        // Buscar baixas para cada título encontrado
+        let paymentInfo = null;
+        let paymentsList: any[] = [];
+
+        if (financialTitles && financialTitles.length > 0) {
+          const titlesWithDischargesPromises = financialTitles.map(async (title: any) => {
+            const discharges = await this.getTitleDischargesPsq015(title).catch(() => []);
+            return { ...title, discharges };
+          });
+          paymentsList = await Promise.all(titlesWithDischargesPromises);
+
+          const allDischarges = paymentsList.flatMap(t => t.discharges || []);
+          if (allDischarges.length > 0) {
+            allDischarges.sort((a: any, b: any) => {
+              const dA = typeof (a.borDtaMvto || 0) === 'string' ? new Date(a.borDtaMvto).getTime() : (a.borDtaMvto || 0);
+              const dB = typeof (b.borDtaMvto || 0) === 'string' ? new Date(b.borDtaMvto).getTime() : (b.borDtaMvto || 0);
+              return dB - dA;
+            });
+            const lastDischarge = allDischarges[0];
+            paymentInfo = {
+              status: 'Pago',
+              date: lastDischarge.borDtaMvto || lastDischarge.bxaDtaBaixa,
+              amount: lastDischarge.bxaMnyValor,
+              details: lastDischarge,
+            };
+          }
+        }
+
+        // Enriquecer contratos com dados de títulos/baixas
+        const enrichedContracts = (contracts || []).map((c: any) => {
+          const correspondingTitle = paymentsList.find(t =>
+            String(t.docCod) === String(c.imcCod) || String(t.titCod) === String(c.imcCod)
+          );
+          let realPaymentDate = null;
+          if (correspondingTitle?.discharges?.length > 0) {
+            const lastBxa = [...correspondingTitle.discharges].sort((a: any, b: any) =>
+              new Date(b.borDtaMvto || 0).getTime() - new Date(a.borDtaMvto || 0).getTime()
+            )[0];
+            realPaymentDate = lastBxa?.borDtaMvto || null;
+          }
+          return {
+            ...c,
+            titDtaVencimento: correspondingTitle?.titDtaVencimento || null,
+            borDtaMvto: realPaymentDate || null,
+          };
+        });
+
+        const expensesArr = Array.isArray(despesas) ? despesas : (despesas?.rows || []);
+
+        return {
+          ...proc,
+          clientName: detailedData?.dpeNomPessoaCons || detailedData?.dpeNomPessoa || proc.dpeNomPessoa,
+          incoterm: detailedData?.incEspSigla || null,
+          contracts: enrichedContracts,
+          payments: paymentsList,
+          paymentInfo,
+          expenses: expensesArr,
+          hasExistingInterest: expensesArr.some((d: any) =>
+            (d.impDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS') ||
+            (d.ctpDesNome || '').toUpperCase().includes('ENCARGOS FINANCEIROS')
+          ),
+          hasFinalizedInvoice,
+          contractData: enrichedContracts.length > 0 ? {
+            taxa: enrichedContracts[0].imcMnyTaxa,
+            moeda: enrichedContracts[0].moeEspNome,
+            valorMoeda: enrichedContracts[0].imcMnyValor,
+            imcCod: enrichedContracts[0].imcCod,
+          } : null,
+          paymentData: paymentInfo,
+        };
+      }));
+      enrichedProcesses.push(...batchResults);
+      if (DEBUG_VERBOSE) console.log(`[2] Enriquecidos ${Math.min(i + BATCH_SIZE, rows.length)}/${rows.length} processos`);
+    }
+
+    return {
+      processes: enrichedProcesses,
+      totalCount,
+      page,
+      pageSize,
     };
   }
 

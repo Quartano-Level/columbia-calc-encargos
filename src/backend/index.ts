@@ -6,6 +6,7 @@ import cdiRouter from './routes/cdi.js';
 import bcbRouter from './routes/bcb.js';
 import settingsRouter from './routes/settings.js';
 import com299Router from './routes/com299.js';
+import filiaisRouter from './routes/filiais.js';
 
 
 const app = express();
@@ -20,6 +21,7 @@ app.use('/cdi', cdiRouter);
 app.use('/bcb', bcbRouter);
 app.use('/settings', settingsRouter);
 app.use('/com299', com299Router);
+app.use('/filiais', filiaisRouter);
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
