@@ -1,218 +1,120 @@
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import { fetchCalculation } from "@/lib/api";
-import { useToast } from '@/hooks/use-toast';
+import { useEffect, useState } from 'react';
+import { useParams } from 'next/navigation';
+import { fetchCalculation } from '@/lib/api';
+import type { CalculationRecord, CalculationPayload, CalculationPayloadV2, Movimento } from '@/lib/types';
+import {
+  CalcHeader,
+  CalcIdentification,
+  CalcParameters,
+  CalcDetailTable,
+  CalcItemSection,
+  CalcResult,
+  CalcFooter,
+} from '@/components/calculation-detail';
+
+function isV2Payload(payload: any): payload is CalculationPayloadV2 {
+  return payload?.payloadVersion === 2 && Array.isArray(payload?.items);
+}
 
 export default function CalculationDetailPage() {
   const params = useParams();
   const id = params.id as string;
-  const router = useRouter();
-  const { toast } = useToast();
 
-  const [calculation, setCalculation] = useState<any | null>(null);
+  const [record, setRecord] = useState<CalculationRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [showPayload, setShowPayload] = useState(false);
 
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const data = await fetchCalculation(id);
-        if (mounted) setCalculation(data);
-      } catch (err: any) {
-        if (mounted) setError(err.message || String(err));
-      } finally { if (mounted) setLoading(false); }
+        if (mounted) setRecord(data as CalculationRecord);
+      } catch (err: unknown) {
+        if (mounted) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (mounted) setLoading(false);
+      }
     })();
-    return () => { mounted = false };
+    return () => { mounted = false; };
   }, [id]);
 
-  const copyId = async () => {
-    try {
-      await navigator.clipboard.writeText(calculation.id);
-      toast({ title: 'ID copiado', description: calculation.id });
-    } catch (e) {
-      toast({ title: 'Erro', description: 'Não foi possível copiar o ID' });
-    }
-  };
+  if (loading) {
+    return (
+      <div className="p-8 flex items-center justify-center min-h-[50vh]">
+        <div className="text-muted-foreground">Carregando memória de cálculo...</div>
+      </div>
+    );
+  }
 
-  const submitCalculation = async () => {
-    if (!calculation?.id) return;
-    if (!confirm('Confirma submeter esse cálculo ao Conexos?')) return;
-    setSubmitting(true);
-    try {
-      const resp = await fetch(`${process.env.NEXT_PUBLIC_API_URL || ''}/calculations/${calculation.id}/submit`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      });
-      const json = await resp.json();
-      if (!resp.ok) throw new Error(json?.error || JSON.stringify(json));
-      toast({ title: 'Submetido', description: `Cálculo ${json.calculationId} submetido` });
-      // atualizar status localmente
-      setCalculation({ ...calculation, status: 'submitted' });
-    } catch (err: any) {
-      toast({ title: 'Erro ao submeter', description: err.message || String(err) });
-    } finally { setSubmitting(false); }
-  };
-
-  const payload = calculation?.payload ?? calculation ?? {};
-  const movimentos = Array.isArray(payload?.movimentos) ? payload.movimentos : (payload?.movements || payload?.payments || []);
-  const currencyUSD = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'USD' });
-  const currencyBRL = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' });
-  const formatDate = (d: any) => {
-    if (!d) return '—';
-    const dt = new Date(d);
-    if (isNaN(dt.getTime())) return String(d);
-    return dt.toLocaleDateString('pt-BR');
-  };
-  const totalMovimentos = movimentos.reduce((s: number, m: any) => s + (Number(m.total ?? m.value ?? m.valorUSD ?? 0) || 0), 0);
-
-  return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h2 className="text-2xl font-semibold">Detalhe do Cálculo</h2>
-          <div className="text-sm text-muted-foreground mt-1">ID: <span className="font-mono">{calculation?.id ?? '—'}</span></div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => router.push('/calculations')}
-            className="px-3 py-2 bg-white border rounded hover:bg-gray-50"
-          >Voltar</button>
-          <button onClick={copyId} className="px-3 py-2 bg-white border rounded hover:bg-gray-50">Copiar ID</button>
-          <button
-            onClick={submitCalculation}
-            disabled={submitting || calculation?.status === 'submitted'}
-            className={`px-3 py-2 rounded text-white ${calculation?.status === 'submitted' ? 'bg-green-500' : 'bg-blue-400 hover:bg-blue-500'}`}
-          >{submitting ? 'Enviando...' : (calculation?.status === 'submitted' ? 'Submetido' : 'Submeter')}</button>
+  if (error || !record) {
+    return (
+      <div className="p-8">
+        <div className="text-red-600 border border-red-200 rounded-lg p-4">
+          Erro ao carregar cálculo: {error || 'Cálculo não encontrado'}
         </div>
       </div>
+    );
+  }
 
-      {loading && <div>Carregando...</div>}
-      {error && <div className="text-red-600">Erro: {error}</div>}
+  const payload = record.payload ?? ({} as CalculationPayload);
 
-      {calculation && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="md:col-span-1 bg-white shadow rounded p-4">
-            <h3 className="font-medium mb-2">Resumo</h3>
-            <div className="text-sm text-gray-700 mb-2"><strong>Processo:</strong> {calculation.processo_id ?? '—'}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Cliente:</strong> {calculation.cliente_id ?? calculation.payload?.clienteId ?? '—'}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Valor (USD):</strong> {currencyUSD.format(Number(calculation.total_desembolso ?? 0))}</div>
-            <div className="text-sm text-gray-700 mb-2"><strong>Total Movimentos (USD):</strong> {currencyUSD.format(totalMovimentos)}</div>
-            {payload.totalLostInterest > 0 && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-100 rounded">
-                <div className="text-xs text-red-600 font-semibold uppercase tracking-wider">Juros Perdidos (Atraso)</div>
-                <div className="text-xl font-bold text-red-700">{currencyBRL.format(payload.totalLostInterest)}</div>
-                <div className="text-xs text-red-500 mt-1">* Calculado com base no CDI diário pós-vencimento.</div>
-              </div>
-            )}
-
-            {payload.hasExistingInterest && (
-              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded flex items-start gap-2">
-                <span className="text-yellow-600">⚠️</span>
-                <div>
-                  <div className="text-sm font-bold text-yellow-800">Atenção: Já existem lançamentos</div>
-                  <div className="text-xs text-yellow-700">Identificamos "Encargos Financeiros" na lista de despesas já lançadas no Conexos para este processo.</div>
-                </div>
-              </div>
-            )}
-
-            <div className="text-sm text-gray-700 mb-2 mt-4"><strong>Calculado em:</strong> {calculation.calculated_at ? new Date(calculation.calculated_at).toLocaleString() : '—'}</div>
-            <div className="text-sm mt-3"><strong>Status:</strong> <span className={`px-2 py-1 rounded ${calculation.status === 'submitted' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{calculation.status}</span></div>
-          </div>
-
-          <div className="md:col-span-2 bg-white shadow rounded p-4">
-            <h3 className="font-medium mb-4">Movimentos</h3>
-
-            {movimentos.length === 0 && <div className="text-sm text-gray-500">Nenhum movimento disponível.</div>}
-
-            {movimentos.length > 0 && (
-              <div className="overflow-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Vencimento</th>
-                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Pagamento</th>
-                      <th className="px-2 py-2 text-left text-xs font-medium text-gray-500">Histórico</th>
-                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Valor (USD)</th>
-                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Atraso</th>
-                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Juros Perdidos (BRL)</th>
-                      <th className="px-2 py-2 text-right text-xs font-medium text-gray-500">Total (USD)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {movimentos.map((m: any, i: number) => (
-                      <tr key={i} className={m.lostInterest > 0 ? "bg-red-50/50" : ""}>
-                        <td className="px-2 py-2 text-sm text-gray-600">{formatDate(m.dueDate || m.pipDtaVcto)}</td>
-                        <td className="px-2 py-2 text-sm text-gray-600">{formatDate(m.paymentDate || m.data)}</td>
-                        <td className="px-2 py-2 text-sm text-gray-600">{m.historico || m.descricao || m.description || 'Parcela'}</td>
-                        <td className="px-2 py-2 text-sm text-right text-gray-700">{currencyUSD.format(Number(m.valorUSD ?? m.value ?? m.pipMnyValor ?? 0))}</td>
-                        <td className="px-2 py-2 text-sm text-right text-red-600 font-medium">
-                          {m.lateDays > 0 ? `${m.lateDays}d` : '—'}
-                        </td>
-                        <td className="px-2 py-2 text-sm text-right text-red-700 font-semibold">
-                          {m.lostInterest > 0 ? currencyBRL.format(m.lostInterest) : '—'}
-                        </td>
-                        <td className="px-2 py-2 text-sm text-right font-medium">
-                          {currencyUSD.format(Number(m.total ?? m.value ?? m.pipMnyValor ?? 0) + Number(m.encargos ?? 0))}
-                        </td>
-                      </tr>
-                    ))}
-                    <tr>
-                      <td colSpan={3} className="px-2 py-2 text-sm font-medium">Total</td>
-                      <td className="px-2 py-2 text-sm text-right font-semibold">{currencyUSD.format(totalMovimentos)}</td>
-                      <td className="px-2 py-2 text-sm text-right" />
-                      <td className="px-2 py-2 text-sm text-right font-bold text-red-700">{payload.totalLostInterest > 0 ? currencyBRL.format(payload.totalLostInterest) : '—'}</td>
-                      <td className="px-2 py-2 text-sm text-right font-bold">{currencyUSD.format(totalMovimentos)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            )}
-
-            <div className="mt-4 flex items-center gap-3">
-              <button onClick={() => setShowPayload(!showPayload)} className="px-3 py-2 bg-white border rounded hover:bg-gray-50">{showPayload ? 'Ocultar payload' : 'Mostrar payload'}</button>
-              <Link href="/calculations" className="text-blue-600 hover:underline">Voltar ao histórico</Link>
-            </div>
-
-            {showPayload && (
-              <pre className="mt-4 text-xs bg-gray-100 p-3 rounded max-h-96 overflow-auto">{JSON.stringify(payload, null, 2)}</pre>
-            )}
-          </div>
-
-          <div className="md:col-span-3 bg-white shadow rounded p-4">
-            <h3 className="font-medium mb-4">Despesas Existentes no Conexos</h3>
-            {!payload.despesas || payload.despesas.length === 0 ? (
-              <div className="text-sm text-gray-500">Nenhuma despesa lançada no Conexos.</div>
-            ) : (
-              <div className="overflow-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase">Descrição</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase">Valor (BRL)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {payload.despesas.map((d: any, idx: number) => (
-                      <tr key={idx} className={d.descricao?.toUpperCase().includes('ENCARGOS FINANCEIROS') ? "bg-yellow-50" : ""}>
-                        <td className="px-3 py-2 text-sm text-gray-600">{d.tipo}</td>
-                        <td className="px-3 py-2 text-sm text-gray-700 font-medium">{d.descricao}</td>
-                        <td className="px-3 py-2 text-sm text-right text-gray-900 font-semibold">{currencyBRL.format(d.valor)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
+  // v2: layout empilhado por item
+  if (isV2Payload(payload)) {
+    return (
+      <div className="p-6 max-w-4xl mx-auto space-y-6 print:p-4 print:max-w-none">
+        <div className="hidden print:block mb-4">
+          <h1 className="text-xl font-bold">Memória de Cálculo de Encargos Financeiros</h1>
+          <p className="text-sm text-gray-500">Columbia Trading — Gerado em {new Date().toLocaleString('pt-BR')}</p>
         </div>
+
+        <CalcHeader calculationId={record.id} />
+        <CalcIdentification record={record} />
+
+        {payload.items.map((item, i) => (
+          <CalcItemSection key={item.id} item={item} index={i} />
+        ))}
+
+        <CalcResult
+          totalEncargos={payload.totalEncargos}
+          totalDesembolso={payload.totalValorBase}
+          itemCount={payload.items.length}
+          currency="BRL"
+        />
+        <CalcFooter record={record} />
+      </div>
+    );
+  }
+
+  // v1: layout legado com movimentos flat
+  const v1Payload = payload as CalculationPayload;
+  const movimentos: Movimento[] = Array.isArray(v1Payload.movimentos) ? v1Payload.movimentos : [];
+  const totalEncargos = movimentos.reduce((acc, m) => acc + (m.encargos ?? 0), 0);
+  const totalDesembolso = movimentos.reduce((acc, m) => acc + (m.valorUSD ?? 0), 0);
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto space-y-6 print:p-4 print:max-w-none">
+      <div className="hidden print:block mb-4">
+        <h1 className="text-xl font-bold">Memória de Cálculo de Encargos Financeiros</h1>
+        <p className="text-sm text-gray-500">Columbia Trading — Gerado em {new Date().toLocaleString('pt-BR')}</p>
+      </div>
+
+      <CalcHeader calculationId={record.id} />
+      <CalcIdentification record={record} />
+      <CalcParameters payload={v1Payload} />
+
+      {movimentos.length > 0 ? (
+        <CalcDetailTable movimentos={movimentos} />
+      ) : (
+        <section className="border rounded-lg p-5">
+          <p className="text-sm text-muted-foreground">Nenhum movimento disponível neste cálculo.</p>
+        </section>
       )}
+
+      <CalcResult totalEncargos={totalEncargos} totalDesembolso={totalDesembolso} />
+      <CalcFooter record={record} />
     </div>
   );
 }

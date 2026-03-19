@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { Process, EnrichedContractData, CalculatorFormState } from "@/lib/types";
+import { Process, EnrichedContractData, CalculatorFormState, CalculationItem, CalculationPayloadV2 } from "@/lib/types";
 import {
 	fetchProcess,
 	fetchContractsByProcess,
@@ -10,6 +10,7 @@ import {
 	fetchBCBLatestCDI,
 	fetchBCBPtaxVenda,
 	submitToConexos,
+	saveCalculationV2,
 	fetchExpensesByProcess,
 } from "@/lib/api";
 import { calcularEncargos } from "@/lib/utils";
@@ -407,6 +408,11 @@ export default function ProcessCalculatorPage() {
 		});
 	}
 
+	function buildFormula(valorBase: number, taxaEfetiva: number, prazo: number, encargos: number): string {
+		const fmt = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+		return `R$ ${fmt(valorBase)} × (${taxaEfetiva.toFixed(4)} / 360 / 100) × ${prazo} = R$ ${fmt(encargos)}`;
+	}
+
 	async function handleSubmit() {
 		if (!process) return;
 		const calculatedTabs = tabs.filter(t => t.formState.encargosCalculados > 0);
@@ -418,17 +424,95 @@ export default function ProcessCalculatorPage() {
 		try {
 			setSubmitting(true);
 			const totalInterest = calculatedTabs.reduce((sum, t) => sum + (t.formState.encargosCalculados || 0), 0);
+			const totalValorBase = calculatedTabs.reduce((sum, t) => sum + (t.formState.valorMoedaNacional || 0), 0);
 			const baseDates = calculatedTabs
 				.map(t => getTabBaseDate(t))
 				.filter(Boolean)
 				.sort();
+			const emissionDate = baseDates[0] || new Date().toISOString().split('T')[0];
+			const firstTab = calculatedTabs[0];
 
-			await submitToConexos(processId, {
+			// 1. Montar items[] a partir dos tabs calculados
+			const items: CalculationItem[] = calculatedTabs.map(t => {
+				const fs = t.formState;
+				const efetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, t.taxaPeriod);
+
+				const item: CalculationItem = {
+					id: t.id,
+					type: t.type,
+					label: t.label,
+					valorBase: fs.valorMoedaNacional || fs.valorMoedaNegociada || 0,
+					moeda: fs.moedaNegociada || 'BRL',
+					valorMoedaOriginal: fs.valorMoedaNegociada || undefined,
+					prazoEmDias: fs.prazoEmDias || 0,
+					dataBase: getTabBaseDate(t) || emissionDate,
+					dataVencimento: fs.vencimentoCliente || '',
+					cdiAoAno: fs.cdiAoAno || 0,
+					spread: fs.spread || 0,
+					taxaEfetiva: efetiva,
+					baseDias: 360,
+					encargosCalculados: fs.encargosCalculados,
+					formula: buildFormula(
+						fs.valorMoedaNacional || fs.valorMoedaNegociada || 0,
+						efetiva,
+						fs.prazoEmDias || 0,
+						fs.encargosCalculados
+					),
+				};
+
+				// Contract-specific fields
+				if (t.type === 'contract') {
+					item.taxaFechamento = fs.taxaFechamento;
+					item.taxaPtaxDI = fs.taxaPtaxDI;
+					item.taxaSpotDoDia = fs.taxaSpotDoDia;
+					item.taxaSpotNegociada = fs.taxaSpotNegociada;
+					item.taxaFutura = fs.taxaFutura;
+				}
+
+				// Expense-specific fields
+				if (t.type === 'expense' && t.sourceData) {
+					const expItems = Array.isArray(t.sourceData.items) ? t.sourceData.items : [];
+					item.contasProjeto = Array.isArray(t.sourceData.projectAccounts) ? t.sourceData.projectAccounts : [];
+					item.detalhesDespesa = expItems.map((e: any) => ({
+						contaProjeto: e.ctpDesNome || '',
+						encargo: e.impDesNome || '',
+						dataConversao: toIsoDate(e.pidDtaTaxas) || '',
+						valorBRL: Number(e.pidMnyValormn || e.pidMnyValorMneg || 0),
+					}));
+				}
+
+				return item;
+			});
+
+			// 2. Montar payload v2 completo
+			const raw = (process as any)?.raw || process;
+			const payload: CalculationPayloadV2 = {
+				payloadVersion: 2,
 				processId,
-				emissionDate: baseDates[0] || new Date().toISOString().split('T')[0],
+				processoNumero: process.processNumber || process.priEspRefcliente || '',
+				clienteId: String(process.priCod || processId),
+				clienteNome: firstTab.formState.nomeCliente || process.clientName || '',
+				refExterna: firstTab.formState.refExterna || process.priEspRefcliente || '',
+				emissionDate,
+				items,
+				totalEncargos: totalInterest,
+				totalValorBase,
+				calculadoEm: new Date().toISOString(),
+			};
+
+			// 3. Salvar cálculo no banco ANTES de submeter ao Conexos
+			const savedCalc = await saveCalculationV2(payload);
+			const calculationId = savedCalc?.id;
+
+			// 4. Submeter ao Conexos usando o UUID do cálculo salvo
+			// encargosCalculados já está em BRL — taxaDolarFiscal deve ser 1 para evitar dupla conversão
+			await submitToConexos(calculationId || processId, {
+				processId,
+				emissionDate,
 				totalInterest,
 				taxaDolarFiscal: 1,
 			});
+
 			showSuccess('Encargos financeiros enviados ao Conexos com sucesso!');
 			await loadProcessData();
 		} catch (err: any) {

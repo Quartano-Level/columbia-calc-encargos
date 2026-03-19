@@ -125,3 +125,17 @@
     @apply bg-background text-foreground;
   }
 }
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    font-size: 12pt;
+    background: white;
+    color: black;
+  }
+  section {
+    break-inside: avoid;
+  }
+}

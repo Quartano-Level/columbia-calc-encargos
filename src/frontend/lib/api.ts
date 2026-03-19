@@ -460,6 +460,41 @@ export async function fetchCom299List(): Promise<Com299Row[]> {
   }
 }
 
+/** Salva cálculo no backend (POST /calculations) e retorna o resultado com UUID do banco. */
+export async function saveCalculationToBackend(input: {
+  processId: string;
+  emissionDate: string;
+  payments: any[];
+  taxaCDI?: number;
+  taxaConexos?: number;
+  taxaPtaxDI?: number;
+}): Promise<{ id: string; totalInterest: number; totalCharges: number; [k: string]: any }> {
+  const response = await fetch(`${API_BASE_URL}/calculations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error || `Erro ao salvar cálculo: ${response.status}`);
+  }
+  return response.json();
+}
+
+/** Salva cálculo v2 (payload por item) no backend. */
+export async function saveCalculationV2(payload: import('./types').CalculationPayloadV2): Promise<{ id: string; status: string; version: number }> {
+  const response = await fetch(`${API_BASE_URL}/calculations/save`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error || `Erro ao salvar cálculo: ${response.status}`);
+  }
+  return response.json();
+}
+
 export interface SubmitToConexosPayload {
 	processId: string;
 	emissionDate: string;
