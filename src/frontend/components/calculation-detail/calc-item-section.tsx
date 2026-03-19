@@ -71,6 +71,9 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-3">
           <Field label="CDI (% a.a.)" value={`${item.cdiAoAno.toFixed(4)}%`} />
           <Field label="Spread (% a.a.)" value={`${item.spread.toFixed(4)}%`} />
+          {item.iofValue != null && item.iofValue > 0 && (
+            <Field label="IOF (% a.a.)" value={`${item.iofValue.toFixed(2)}%`} />
+          )}
           <Field label="Taxa Efetiva (% a.a.)" value={`${item.taxaEfetiva.toFixed(4)}%`} highlight />
           <Field label="Base de Dias" value={String(item.baseDias)} />
         </div>
@@ -116,7 +119,7 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
               onClick={() => setShowExpenseDetails(!showExpenseDetails)}
               className="text-xs text-muted-foreground hover:text-foreground transition-colors no-print"
             >
-              {showExpenseDetails ? 'Ocultar' : 'Ver'} {item.detalhesDespesa.length} lançamento(s)
+              {showExpenseDetails ? 'Ocultar' : 'Ver'} {item.detalhesDespesa!.length} lançamento(s)
             </button>
             {showExpenseDetails && (
               <div className="mt-2 overflow-x-auto">
@@ -126,19 +129,38 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
                       <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Conta Projeto</th>
                       <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Encargo</th>
                       <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Data Conversão</th>
-                      <th className="text-right py-2 font-medium text-muted-foreground">Valor (BRL)</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Valor (BRL)</th>
+                      <th className="text-right py-2 font-medium text-muted-foreground">Valor Encargo (BRL)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {item.detalhesDespesa.map((d, i) => (
-                      <tr key={i} className="border-b border-gray-50">
-                        <td className="py-2 pr-4">{d.contaProjeto || '—'}</td>
-                        <td className="py-2 pr-4">{d.encargo || '—'}</td>
-                        <td className="py-2 pr-4">{fmtDate(d.dataConversao)}</td>
-                        <td className="py-2 text-right tabular-nums">R$ {fmtBRL(d.valorBRL)}</td>
-                      </tr>
-                    ))}
+                    {item.detalhesDespesa!.map((d, i) => {
+                      const proporcao = item.valorBase > 0 ? d.valorBRL / item.valorBase : 0;
+                      const encargoProporc = proporcao * item.encargosCalculados;
+                      return (
+                        <tr key={i} className="border-b border-gray-50">
+                          <td className="py-2 pr-4">{d.contaProjeto || '—'}</td>
+                          <td className="py-2 pr-4">{d.encargo || '—'}</td>
+                          <td className="py-2 pr-4">{fmtDate(d.dataConversao)}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums">R$ {fmtBRL(d.valorBRL)}</td>
+                          <td className="py-2 text-right tabular-nums text-blue-700 font-medium">
+                            R$ {fmtBRL(encargoProporc)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
+                  <tfoot>
+                    <tr className="border-t border-gray-200">
+                      <td colSpan={3} />
+                      <td className="py-2 pr-4 text-right tabular-nums font-semibold">
+                        R$ {fmtBRL(item.valorBase)}
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-blue-700 font-semibold">
+                        R$ {fmtBRL(item.encargosCalculados)}
+                      </td>
+                    </tr>
+                  </tfoot>
                 </table>
               </div>
             )}
