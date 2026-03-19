@@ -86,6 +86,7 @@ export const CalculationItemSchema = z.object({
   cdiAoAno: z.number().nonnegative(),
   spread: z.number().min(0),
   taxaEfetiva: z.number().nonnegative(),
+  iofValue: z.number().nonnegative().optional(),
   baseDias: z.union([z.literal(360), z.literal(252)]),
   encargosCalculados: z.number().nonnegative(),
   formula: z.string(),
@@ -100,6 +101,7 @@ export const CalculationItemSchema = z.object({
     encargo: z.string(),
     dataConversao: z.string(),
     valorBRL: z.number(),
+    encargosProporcionais: z.number().nonnegative().optional(),
   })).optional(),
 });
 

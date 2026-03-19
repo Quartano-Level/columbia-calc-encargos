@@ -186,6 +186,7 @@ export interface CalculationItem {
 	cdiAoAno: number;
 	spread: number;
 	taxaEfetiva: number;
+	iofValue?: number;
 	baseDias: 360 | 252;
 	encargosCalculados: number;
 	formula: string;
@@ -200,6 +201,7 @@ export interface CalculationItem {
 		encargo: string;
 		dataConversao: string;
 		valorBRL: number;
+		encargosProporcionais?: number;
 	}>;
 }
 

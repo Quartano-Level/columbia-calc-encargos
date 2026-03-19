@@ -38,6 +38,7 @@ interface CalculatorTab {
 	enrichedContract?: EnrichedContractData | null;
 	taxaPeriod: TaxaPeriod;
 	taxaInputValue: number | null;
+	iof: boolean;
 }
 
 const defaultFormState: CalculatorFormState = {
@@ -65,21 +66,22 @@ const defaultFormState: CalculatorFormState = {
 const formatBRL = (val: number) =>
 	new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
 
-/** Converte taxa de um período para taxa anual */
+/** Converte taxa de um período para taxa anual (divisão simples / linear) */
 function taxaParaAnual(value: number, period: TaxaPeriod): number {
 	if (!value) return 0;
 	if (period === 'anual') return value;
-	if (period === 'mensal') return (Math.pow(1 + value / 100, 12) - 1) * 100;
-	// diario: base 252 dias úteis
-	return (Math.pow(1 + value / 100, 252) - 1) * 100;
+	if (period === 'mensal') return value * 12;
+	// diario: base 360 dias corridos
+	return value * 360;
 }
 
-/** Converte taxa anual para o período desejado */
+/** Converte taxa anual para o período desejado (divisão simples / linear) */
 function taxaDeAnual(annualRate: number, period: TaxaPeriod): number {
 	if (!annualRate) return 0;
 	if (period === 'anual') return annualRate;
-	if (period === 'mensal') return (Math.pow(1 + annualRate / 100, 1 / 12) - 1) * 100;
-	return (Math.pow(1 + annualRate / 100, 1 / 252) - 1) * 100;
+	if (period === 'mensal') return annualRate / 12;
+	// diario: base 360 dias corridos
+	return annualRate / 360;
 }
 
 const PERIOD_LABELS: Record<TaxaPeriod, string> = {
@@ -117,10 +119,11 @@ function formatConexosBillingTerm(days: number | null | undefined): string {
 	return 'não informado';
 }
 
-/** Soma CDI + spread no mesmo período e converte resultado para anual */
-function taxaEfetivaAnual(cdiAnual: number, spread: number, period: TaxaPeriod): number {
+/** Soma CDI + spread no mesmo período e converte resultado para anual. IOF adiciona 0,38% a.a. */
+function taxaEfetivaAnual(cdiAnual: number, spread: number, period: TaxaPeriod, iof: boolean = false): number {
 	const cdiNoPeriodo = taxaDeAnual(cdiAnual, period);
-	return taxaParaAnual(cdiNoPeriodo + spread, period);
+	const base = taxaParaAnual(cdiNoPeriodo + spread, period);
+	return iof ? base + 0.38 : base;
 }
 
 export default function ProcessCalculatorPage() {
@@ -233,6 +236,7 @@ export default function ProcessCalculatorPage() {
 						enrichedContract: enriched,
 						taxaPeriod: 'anual' as TaxaPeriod,
 						taxaInputValue: null,
+						iof: false,
 					};
 				})
 			);
@@ -277,6 +281,7 @@ export default function ProcessCalculatorPage() {
 					calculated: false,
 					taxaPeriod: 'anual' as TaxaPeriod,
 					taxaInputValue: null,
+					iof: false,
 				};
 			});
 
@@ -399,7 +404,7 @@ export default function ProcessCalculatorPage() {
 			return;
 		}
 
-		const taxaEfetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, activeTab.taxaPeriod);
+		const taxaEfetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, activeTab.taxaPeriod, activeTab.iof);
 		const encargo = calcularEncargos(baseCalculo, taxaEfetiva, fs.prazoEmDias);
 
 		updateTab(activeTab.id, {
@@ -435,7 +440,7 @@ export default function ProcessCalculatorPage() {
 			// 1. Montar items[] a partir dos tabs calculados
 			const items: CalculationItem[] = calculatedTabs.map(t => {
 				const fs = t.formState;
-				const efetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, t.taxaPeriod);
+				const efetiva = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, t.taxaPeriod, t.iof);
 
 				const item: CalculationItem = {
 					id: t.id,
@@ -450,6 +455,7 @@ export default function ProcessCalculatorPage() {
 					cdiAoAno: fs.cdiAoAno || 0,
 					spread: fs.spread || 0,
 					taxaEfetiva: efetiva,
+					iofValue: t.iof ? 0.38 : 0,
 					baseDias: 360,
 					encargosCalculados: fs.encargosCalculados,
 					formula: buildFormula(
@@ -473,11 +479,21 @@ export default function ProcessCalculatorPage() {
 				if (t.type === 'expense' && t.sourceData) {
 					const expItems = Array.isArray(t.sourceData.items) ? t.sourceData.items : [];
 					item.contasProjeto = Array.isArray(t.sourceData.projectAccounts) ? t.sourceData.projectAccounts : [];
-					item.detalhesDespesa = expItems.map((e: any) => ({
+
+					const detalhes = expItems.map((e: any) => ({
 						contaProjeto: e.ctpDesNome || '',
 						encargo: e.impDesNome || '',
 						dataConversao: toIsoDate(e.pidDtaTaxas) || '',
 						valorBRL: Number(e.pidMnyValormn || e.pidMnyValorMneg || 0),
+					}));
+
+					// Calcular encargos proporcionais por lançamento
+					const totalValorDetalhes = detalhes.reduce((sum: number, d: any) => sum + d.valorBRL, 0);
+					item.detalhesDespesa = detalhes.map((d: any) => ({
+						...d,
+						encargosProporcionais: totalValorDetalhes > 0
+							? item.encargosCalculados * (d.valorBRL / totalValorDetalhes)
+							: 0,
 					}));
 				}
 
@@ -808,7 +824,7 @@ export default function ProcessCalculatorPage() {
 
 	function renderCalculationSection(tab: CalculatorTab) {
 		const fs = tab.formState;
-		const taxaAnual = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, tab.taxaPeriod);
+		const taxaAnual = taxaEfetivaAnual(fs.cdiAoAno || 0, fs.spread || 0, tab.taxaPeriod, tab.iof);
 
 		return (
 			<Card>
@@ -875,10 +891,21 @@ export default function ProcessCalculatorPage() {
 								placeholder="0,0000"
 							/>
 							<span className="text-sm text-gray-500 whitespace-nowrap">% {PERIOD_SHORT[tab.taxaPeriod]}</span>
-							<span className="text-sm text-gray-300 mx-1">|</span>
-							<span className="text-sm font-semibold text-blue-700 whitespace-nowrap">
-								Taxa efetiva: {taxaAnual.toFixed(4)}% a.a.
-							</span>
+							</div>
+							<div className="flex items-center justify-between pt-1">
+								<label className="flex items-center gap-2 cursor-pointer">
+									<input
+										type="checkbox"
+										checked={tab.iof}
+										onChange={(e) => updateTab(tab.id, { iof: e.target.checked })}
+										className="w-4 h-4 text-blue-600 rounded border-gray-300"
+									/>
+									<span className="text-sm text-gray-700">IOF (+ 0,38% a.a.)</span>
+								</label>
+								<span className="text-sm font-semibold text-blue-700 whitespace-nowrap">
+									Taxa efetiva: {taxaAnual.toFixed(4)}% a.a.
+									{tab.iof && <span className="text-xs text-gray-500 ml-1">(CDI + Spread + IOF)</span>}
+								</span>
 							</div>
 						</div>
 					)}
