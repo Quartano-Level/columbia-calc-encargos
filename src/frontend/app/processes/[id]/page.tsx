@@ -132,6 +132,7 @@ export default function ProcessCalculatorPage() {
 	const searchParams = useSearchParams();
 	const processId = params.id as string;
 	const contractIdParam = searchParams.get('contractId');
+	const filCod = searchParams.get('filCod') ? Number(searchParams.get('filCod')) : undefined;
 	const { toast } = useToast();
 
 	const [process, setProcess] = useState<Process | null>(null);
@@ -191,7 +192,7 @@ export default function ProcessCalculatorPage() {
 		try {
 			setLoading(true);
 
-			const data = await fetchProcess(processId);
+			const data = await fetchProcess(processId, filCod);
 			const processData = data.process;
 			setProcess(processData);
 			const rawBillingTermDays = processData?.billingTermDays;
@@ -203,8 +204,8 @@ export default function ProcessCalculatorPage() {
 			if (isNaN(priCod)) return;
 
 			const [contractsData, expensesData] = await Promise.all([
-				fetchContractsByProcess(priCod),
-				fetchExpensesByProcess(priCod),
+				fetchContractsByProcess(priCod, filCod),
+				fetchExpensesByProcess(priCod, filCod),
 			]);
 
 			const raw = (processData as any)?.raw || processData;
@@ -217,7 +218,7 @@ export default function ProcessCalculatorPage() {
 					const tabId = `contract-${contract.imcCod}`;
 					let enriched: EnrichedContractData | null = null;
 					try {
-						enriched = await fetchEnrichedContractData(priCod, contract.imcCod);
+						enriched = await fetchEnrichedContractData(priCod, contract.imcCod, filCod);
 					} catch (err) {
 						console.warn(`Failed to enrich contract ${contract.imcCod}:`, err);
 					}

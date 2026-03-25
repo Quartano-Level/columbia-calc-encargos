@@ -173,7 +173,8 @@ router.get('/:priCod/contracts', async (req, res) => {
     if (isNaN(priCod)) {
       return res.status(400).json({ error: 'priCod inválido' });
     }
-    const contracts = await conexosService.getContractsByProcess(priCod);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const contracts = await conexosService.getContractsByProcess(priCod, filCod);
     res.json({ source: 'conexos', data: contracts });
   } catch (err: any) {
     res.status(502).json({ error: 'Erro ao buscar contratos do Conexos', details: err.message });
@@ -190,7 +191,8 @@ router.get('/:priCod/contracts/:imcCod/enriched', async (req, res) => {
       return res.status(400).json({ error: 'priCod ou imcCod inválido' });
     }
 
-    const enriched = await conexosService.getEnrichedContractData(imcCod, priCod);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const enriched = await conexosService.getEnrichedContractData(imcCod, priCod, filCod);
     res.json({ source: 'conexos', data: enriched });
   } catch (err: any) {
     res.status(502).json({
@@ -203,7 +205,8 @@ router.get('/:priCod/contracts/:imcCod/enriched', async (req, res) => {
 // GET /processes/:id/expenses - despesas do processo (api/imp021/DespesasProcesso)
 router.get('/:id/expenses', async (req, res) => {
   try {
-    const respExpenses = await conexosService.getDespesasByProcessId(req.params.id);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const respExpenses = await conexosService.getDespesasByProcessId(req.params.id, filCod);
     const expenses = Array.isArray(respExpenses) ? respExpenses : (respExpenses?.rows || []);
     res.json({ source: 'conexos', data: expenses });
   } catch (err: any) {
@@ -222,7 +225,8 @@ router.get('/:id', async (req, res) => {
     });
   }
   try {
-    const processo = await conexosService.getProcessById(id);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const processo = await conexosService.getProcessById(id, filCod);
 
     // Tentar buscar parcelas/movimentos do Conexos e títulos financeiros (para vencimento real)
     let payments: any[] = [];
@@ -230,8 +234,8 @@ router.get('/:id', async (req, res) => {
     try {
       const priCodNum = Number(id);
       const [rawParcels, financialTitles] = await Promise.all([
-        conexosService.getParcelsByProcessId(id),
-        !isNaN(priCodNum) ? conexosService.getFinancialTitlesPsq015(priCodNum) : Promise.resolve([])
+        conexosService.getParcelsByProcessId(id, filCod),
+        !isNaN(priCodNum) ? conexosService.getFinancialTitlesPsq015(priCodNum, filCod) : Promise.resolve([])
       ]);
 
       const parcels = Array.isArray(rawParcels) ? rawParcels : rawParcels?.rows || [];
@@ -270,7 +274,7 @@ router.get('/:id', async (req, res) => {
     // Buscar despesas já existentes no Conexos
     let expenses: any[] = [];
     try {
-      const respExpenses = await conexosService.getDespesasByProcessId(id);
+      const respExpenses = await conexosService.getDespesasByProcessId(id, filCod);
       expenses = Array.isArray(respExpenses) ? respExpenses : (respExpenses?.rows || []);
     } catch (expErr) {
       console.warn('Failed to fetch expenses for process', id, expErr);
@@ -286,9 +290,9 @@ router.get('/:id', async (req, res) => {
     const priCod = Number(rawProcess?.priCod || id);
     if (priCod) {
       try {
-        const invCod = await conexosService.getInvoiceCodeLog009(priCod);
+        const invCod = await conexosService.getInvoiceCodeLog009(priCod, filCod);
         if (invCod) {
-          const log009Data = await conexosService.getProcessDetailsLog009(invCod);
+          const log009Data = await conexosService.getProcessDetailsLog009(invCod, filCod);
           incotermFromLog009 = log009Data?.incEspSigla || null;
         }
       } catch (e) {

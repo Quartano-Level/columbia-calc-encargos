@@ -209,7 +209,7 @@ class ConexosService {
     }
   }
 
-  async getContractsByProcess(priCod: number) {
+  async getContractsByProcess(priCod: number, filCod: number = config.conexos.filCod) {
     await this.ensureSid();
 
     const body = {
@@ -227,7 +227,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -355,13 +355,13 @@ class ConexosService {
     return allProcesses;
   }
 
-  async getParcelsByProcessId(processId: string) {
+  async getParcelsByProcessId(processId: string, filCod: number = config.conexos.filCod) {
     boxLog('Conexos: getParcelsByProcessId Input', { processId });
     await this.ensureSid();
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -499,7 +499,7 @@ class ConexosService {
     }
   }
 
-  async getDespesasByProcessId(processId: string) {
+  async getDespesasByProcessId(processId: string, filCod: number = config.conexos.filCod) {
     boxLog('Conexos: getDespesasByProcessId Input', { processId });
     await this.ensureSid();
     const body = {
@@ -514,7 +514,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -629,26 +629,42 @@ class ConexosService {
     }
   }
 
-  async getProcessById(id: string) {
-    boxLog('Conexos: getProcessById Input', { id });
+  async getProcessById(id: string, filCod: number = config.conexos.filCod) {
+    boxLog('Conexos: getProcessById Input', { id, filCod });
     await this.ensureSid();
-    const getHeaders = () => ({
+
+    // Usa endpoint de LIST com filtro priCod#EQ para garantir que o cnx-filcod é respeitado.
+    // O GET /imp021/{id} ignora o cnx-filcod e pode retornar o processo de outra filial
+    // quando o mesmo priCod existe em múltiplas filiais.
+    const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
-    });
+    };
+
+    const body = {
+      fieldList: [],
+      filterList: { 'priCod#EQ': Number(id), 'filCod#EQ': filCod },
+      pageNumber: 1,
+      pageSize: 1,
+      serviceName: 'imp021',
+      orderList: { orderList: [{ propertyName: 'priCod', order: 'asc' }] },
+    };
+
     try {
-      const resp = await this.client.get(`/imp021/${id}`, { headers: getHeaders() });
-      return resp.data;
+      const resp = await this.client.post('/imp021/list', body, { headers });
+      // Retorna o primeiro registro encontrado (mesmo formato que o GET direto esperava)
+      const row = resp.data?.rows?.[0] ?? resp.data;
+      return row;
     } catch (err: any) {
       if (err.response && err.response.status === 401) {
         if (DEBUG_VERBOSE) console.log('[Conexos] 401 em getProcessById, refazendo login...');
         await this.login();
-        const retryResp = await this.client.get(`/imp021/${id}`, { headers: getHeaders() });
-        return retryResp.data;
+        const retryResp = await this.client.post('/imp021/list', body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows?.[0] ?? retryResp.data;
       }
       throw err;
     }
@@ -1038,18 +1054,18 @@ class ConexosService {
 
         // Busca dados independentes em paralelo
         const [contracts, financialTitles, despesas, invCod, hasFinalizedInvoice] = await Promise.all([
-          this.getContractsByProcess(priCod).catch(() => []),
-          this.getFinancialTitlesPsq015(priCod).catch(() => []),
-          this.getDespesasByProcessId(String(priCod)).catch(() => []),
-          this.getInvoiceCodeLog009(priCod).catch(() => null),
-          this.hasFinalizedInvoiceByProcess(priCod).catch(() => false),
+          this.getContractsByProcess(priCod, filCod).catch(() => []),
+          this.getFinancialTitlesPsq015(priCod, filCod).catch(() => []),
+          this.getDespesasByProcessId(String(priCod), filCod).catch(() => []),
+          this.getInvoiceCodeLog009(priCod, filCod).catch(() => null),
+          this.hasFinalizedInvoiceByProcess(priCod, filCod).catch(() => false),
         ]);
 
         // Busca detalhes (incoterm) se tiver invCod
         let detailedData = null;
         if (invCod) {
           try {
-            const log009Data = await this.getProcessDetailsLog009(invCod);
+            const log009Data = await this.getProcessDetailsLog009(invCod, filCod);
             detailedData = Array.isArray(log009Data) && log009Data.length > 0
               ? log009Data[0]
               : (!Array.isArray(log009Data) ? log009Data : null);
@@ -1309,7 +1325,7 @@ class ConexosService {
     return { processes: processesForExport };
   }
 
-  async getInvoiceCodeLog009(priCod: number) {
+  async getInvoiceCodeLog009(priCod: number, filCod: number = config.conexos.filCod) {
     if (!priCod) return null;
     await this.ensureSid();
 
@@ -1324,7 +1340,7 @@ class ConexosService {
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',
@@ -1352,7 +1368,7 @@ class ConexosService {
     }
   }
 
-  async getProcessDetailsLog009(invCod: number) {
+  async getProcessDetailsLog009(invCod: number, filCod: number = config.conexos.filCod) {
     if (!invCod) {
       // console.warn('[getProcessDetailsLog009] invCod não disponível no processo.');
       return null;
@@ -1361,7 +1377,7 @@ class ConexosService {
 
     const headers = {
       ...this.getAuthHeaders(),
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
     };
@@ -1825,11 +1841,11 @@ class ConexosService {
    * @param imcCod Código do contrato
    * @param priCod Código do processo (para buscar dados relacionados)
    */
-  async getEnrichedContractData(imcCod: number, priCod: number): Promise<any> {
+  async getEnrichedContractData(imcCod: number, priCod: number, filCod: number = config.conexos.filCod): Promise<any> {
     await this.ensureSid();
 
     // Buscar contrato base
-    const contracts = await this.getContractsByProcess(priCod);
+    const contracts = await this.getContractsByProcess(priCod, filCod);
     const contract = contracts.find((c: any) => c.imcCod === imcCod);
 
     if (!contract) {

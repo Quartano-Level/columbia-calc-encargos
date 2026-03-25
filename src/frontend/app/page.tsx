@@ -695,7 +695,7 @@ export default function Home() {
 													className="h-7 px-3 text-[10px] bg-[#337ab7] hover:bg-blue-700 text-white font-bold rounded shadow-sm"
 													onClick={(e) => {
 														e.stopPropagation();
-														router.push(`/processes/${process.id}`);
+														router.push(`/processes/${process.id}?filCod=${selectedFilCod}`);
 													}}
 												>
 													CALCULAR

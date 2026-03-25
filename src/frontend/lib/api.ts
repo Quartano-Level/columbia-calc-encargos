@@ -195,8 +195,9 @@ export async function fetchProcessesForExport(filCod?: number): Promise<{ proces
 }
 
 
-export async function fetchProcess(id: string): Promise<{ process: Process; payments: Payment[] }> {
-	const response = await fetch(`${API_BASE_URL}/processes/${id}`, {
+export async function fetchProcess(id: string, filCod?: number): Promise<{ process: Process; payments: Payment[] }> {
+	const params = filCod ? `?filCod=${filCod}` : '';
+	const response = await fetch(`${API_BASE_URL}/processes/${id}${params}`, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
 	});
@@ -216,8 +217,9 @@ export async function fetchContracts(): Promise<any[]> {
 	return data?.data || [];
 }
 
-export async function fetchContractsByProcess(priCod: number): Promise<any[]> {
-	const response = await fetch(`${API_BASE_URL}/processes/${priCod}/contracts`, {
+export async function fetchContractsByProcess(priCod: number, filCod?: number): Promise<any[]> {
+	const params = filCod ? `?filCod=${filCod}` : '';
+	const response = await fetch(`${API_BASE_URL}/processes/${priCod}/contracts${params}`, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
 	});
@@ -249,9 +251,10 @@ export async function fetchEncargosFinanceirosByProcess(priCod: number): Promise
 }
 
 /** Retorna todas as despesas de um processo */
-export async function fetchExpensesByProcess(priCod: number): Promise<any[]> {
+export async function fetchExpensesByProcess(priCod: number, filCod?: number): Promise<any[]> {
 	try {
-		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/expenses`, {
+		const params = filCod ? `?filCod=${filCod}` : '';
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/expenses${params}`, {
 			method: "GET",
 			headers: { "Accept": "application/json" },
 		});
@@ -391,8 +394,9 @@ export async function fetchBCBPtaxVenda(date: string): Promise<number | null> {
 }
 
 /** Fetch enriched contract data (with Taxa Ptax DI, dataFaturamento, flags) */
-export async function fetchEnrichedContractData(priCod: number, imcCod: number): Promise<any> {
-	const response = await fetch(`${API_BASE_URL}/processes/${priCod}/contracts/${imcCod}/enriched`, {
+export async function fetchEnrichedContractData(priCod: number, imcCod: number, filCod?: number): Promise<any> {
+	const params = filCod ? `?filCod=${filCod}` : '';
+	const response = await fetch(`${API_BASE_URL}/processes/${priCod}/contracts/${imcCod}/enriched${params}`, {
 		method: "GET",
 		headers: { "Accept": "application/json" },
 	});
