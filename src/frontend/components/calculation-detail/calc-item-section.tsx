@@ -44,12 +44,12 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
           {index + 1}
         </span>
         <h3 className="text-sm font-semibold text-gray-800 flex-1">{item.label}</h3>
-        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-          item.type === 'contract'
-            ? 'bg-blue-50 text-blue-700'
-            : 'bg-amber-50 text-amber-700'
-        }`}>
-          {item.type === 'contract' ? 'Contrato' : 'Despesa'}
+        <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-50 text-blue-700">
+          {item.type === 'contract' ? 'Contrato'
+            : item.type === 'tax_comercializacao' ? 'Comercialização'
+            : item.type === 'tax_di' ? 'Impostos (DI)'
+            : item.type === 'tax' ? 'Imposto'
+            : 'Despesa'}
         </span>
       </div>
 
@@ -113,7 +113,65 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
           </div>
         )}
 
-        {item.type === 'expense' && item.detalhesDespesa && item.detalhesDespesa.length > 0 && (
+        {/* Comercialização — tabela delta */}
+        {item.type === 'tax_comercializacao' && item.detalhesDespesa && item.detalhesDespesa.length > 0 && (
+          <div className="border-t pt-3">
+            <button
+              onClick={() => setShowExpenseDetails(!showExpenseDetails)}
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors no-print"
+            >
+              {showExpenseDetails ? 'Ocultar' : 'Ver'} detalhamento de {item.detalhesDespesa.length} imposto(s)
+            </button>
+            {showExpenseDetails && (
+              <div className="mt-2 overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-gray-100">
+                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Imposto</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Valor Total (R$)</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Nacionalização (R$)</th>
+                      <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Delta (Base)</th>
+                      <th className="text-right py-2 font-medium text-muted-foreground">Encargo (R$)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {item.detalhesDespesa.map((d, i) => {
+                      const proporcao = item.valorBase > 0 ? d.valorBRL / item.valorBase : 0;
+                      const encargoProporc = d.encargosProporcionais ?? (proporcao * item.encargosCalculados);
+                      return (
+                        <tr key={i} className="border-b border-gray-50">
+                          <td className="py-2 pr-4 font-medium">{d.encargo || '—'}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums">R$ {fmtBRL(d.valorFull ?? 0)}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums text-gray-500">
+                            {(d.valorNacionalizacao ?? 0) > 0 ? `R$ ${fmtBRL(d.valorNacionalizacao!)}` : 'N/A'}
+                          </td>
+                          <td className="py-2 pr-4 text-right tabular-nums font-semibold text-blue-700">R$ {fmtBRL(d.valorBRL)}</td>
+                          <td className="py-2 text-right tabular-nums text-blue-700 font-medium">
+                            R$ {fmtBRL(encargoProporc)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <tfoot>
+                    <tr className="border-t border-gray-200">
+                      <td colSpan={3} />
+                      <td className="py-2 pr-4 text-right tabular-nums font-semibold">
+                        R$ {fmtBRL(item.valorBase)}
+                      </td>
+                      <td className="py-2 text-right tabular-nums text-blue-700 font-semibold">
+                        R$ {fmtBRL(item.encargosCalculados)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* IMPOSTOS (DI) e Despesas — tabela simples */}
+        {(item.type === 'expense' || item.type === 'tax_di' || item.type === 'tax') && item.detalhesDespesa && item.detalhesDespesa.length > 0 && (
           <div className="border-t pt-3">
             <button
               onClick={() => setShowExpenseDetails(!showExpenseDetails)}
@@ -126,22 +184,22 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-gray-100">
-                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Conta Projeto</th>
-                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Encargo</th>
-                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Data Conversão</th>
+                      {item.type === 'expense' && <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Conta Projeto</th>}
+                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">{item.type === 'expense' ? 'Encargo' : 'Imposto'}</th>
+                      {item.type === 'expense' && <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Data Conversão</th>}
                       <th className="text-right py-2 pr-4 font-medium text-muted-foreground">Valor (BRL)</th>
-                      <th className="text-right py-2 font-medium text-muted-foreground">Valor Encargo (BRL)</th>
+                      <th className="text-right py-2 font-medium text-muted-foreground">Encargo (R$)</th>
                     </tr>
                   </thead>
                   <tbody>
                     {item.detalhesDespesa!.map((d, i) => {
                       const proporcao = item.valorBase > 0 ? d.valorBRL / item.valorBase : 0;
-                      const encargoProporc = proporcao * item.encargosCalculados;
+                      const encargoProporc = d.encargosProporcionais ?? (proporcao * item.encargosCalculados);
                       return (
                         <tr key={i} className="border-b border-gray-50">
-                          <td className="py-2 pr-4">{d.contaProjeto || '—'}</td>
+                          {item.type === 'expense' && <td className="py-2 pr-4">{d.contaProjeto || '—'}</td>}
                           <td className="py-2 pr-4">{d.encargo || '—'}</td>
-                          <td className="py-2 pr-4">{fmtDate(d.dataConversao)}</td>
+                          {item.type === 'expense' && <td className="py-2 pr-4">{fmtDate(d.dataConversao)}</td>}
                           <td className="py-2 pr-4 text-right tabular-nums">R$ {fmtBRL(d.valorBRL)}</td>
                           <td className="py-2 text-right tabular-nums text-blue-700 font-medium">
                             R$ {fmtBRL(encargoProporc)}
@@ -152,7 +210,7 @@ export function CalcItemSection({ item, index }: CalcItemSectionProps) {
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-gray-200">
-                      <td colSpan={3} />
+                      <td colSpan={item.type === 'expense' ? 3 : 1} />
                       <td className="py-2 pr-4 text-right tabular-nums font-semibold">
                         R$ {fmtBRL(item.valorBase)}
                       </td>

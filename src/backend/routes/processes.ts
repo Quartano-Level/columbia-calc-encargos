@@ -214,6 +214,98 @@ router.get('/:id/expenses', async (req, res) => {
   }
 });
 
+// GET /processes/:id/taxes - impostos das NFs do processo (com297 + com017)
+router.get('/:id/taxes', async (req, res) => {
+  try {
+    const priCod = Number(req.params.id);
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const pesCod = req.query.pesCod ? parseInt(String(req.query.pesCod), 10) : undefined;
+
+    // 1. Listar NFs do processo (filtrando por pesCod quando disponível)
+    const nfsResp = await conexosService.listInvoicesByProcess(priCod, pesCod, filCod);
+    const nfs = Array.isArray(nfsResp) ? nfsResp : (nfsResp?.rows || []);
+
+    if (nfs.length === 0) {
+      return res.json({ source: 'conexos', data: { byNF: [], consolidated: [], totalNFs: 0 } });
+    }
+
+    // 2. Buscar encargosGerais de cada NF em paralelo (batches de 10)
+    const BATCH = 10;
+    const byNF: any[] = [];
+    for (let i = 0; i < nfs.length; i += BATCH) {
+      const batch = nfs.slice(i, i + BATCH);
+      await Promise.all(batch.map(async (nf: any) => {
+        try {
+          const invFilCod = nf.filCod ?? filCod;
+          const encargos = await conexosService.getEncargosGeraisByInvoice(1, nf.docCod, invFilCod);
+          const impostos: any[] = encargos?.impostos || [];
+          byNF.push({
+            docCod: nf.docCod,
+            docEspNumero: nf.docEspNumero,
+            docDtaEmissao: nf.docDtaEmissao,
+            dpeNomPessoa: nf.dpeNomPessoa,
+            impostos: impostos.map((imp: any) => ({
+              impDesNome: imp.impDesNome,
+              dtrPctAliquota: imp.dtrPctAliquota,
+              dtrMnyValormn: imp.dtrMnyValormn ?? 0,
+              dtrMnyValorDolar: imp.dtrMnyValorDolar ?? 0,
+              dtrNumOrdem: imp.dtrNumOrdem ?? 0,
+            })),
+          });
+        } catch (err: any) {
+          console.warn(`[GET /processes/:id/taxes] Falha ao buscar encargos da NF docCod=${nf.docCod}:`, err?.message || err);
+        }
+      }));
+    }
+
+    // 3. Consolidar impostos por impDesNome
+    const consolidationMap = new Map<string, {
+      impDesNome: string;
+      aliquotas: Set<number>;
+      dtrMnyValormn: number;
+      dtrMnyValorDolar: number;
+      dtrNumOrdem: number;
+    }>();
+
+    for (const nf of byNF) {
+      for (const imp of nf.impostos) {
+        const key = imp.impDesNome;
+        if (!consolidationMap.has(key)) {
+          consolidationMap.set(key, {
+            impDesNome: key,
+            aliquotas: new Set(),
+            dtrMnyValormn: 0,
+            dtrMnyValorDolar: 0,
+            dtrNumOrdem: imp.dtrNumOrdem,
+          });
+        }
+        const entry = consolidationMap.get(key)!;
+        if (imp.dtrPctAliquota != null) entry.aliquotas.add(imp.dtrPctAliquota);
+        entry.dtrMnyValormn += imp.dtrMnyValormn ?? 0;
+        entry.dtrMnyValorDolar += imp.dtrMnyValorDolar ?? 0;
+        if (imp.dtrNumOrdem < entry.dtrNumOrdem) entry.dtrNumOrdem = imp.dtrNumOrdem;
+      }
+    }
+
+    const consolidated = Array.from(consolidationMap.values())
+      .map(entry => ({
+        impDesNome: entry.impDesNome,
+        aliquotas: Array.from(entry.aliquotas).sort((a, b) => a - b),
+        dtrPctAliquota: Array.from(entry.aliquotas)[0] ?? null,
+        dtrMnyValormn: entry.dtrMnyValormn,
+        dtrMnyValorDolar: entry.dtrMnyValorDolar,
+        dtrNumOrdem: entry.dtrNumOrdem,
+      }))
+      .sort((a, b) => a.dtrNumOrdem !== b.dtrNumOrdem
+        ? a.dtrNumOrdem - b.dtrNumOrdem
+        : a.impDesNome.localeCompare(b.impDesNome, 'pt-BR'));
+
+    res.json({ source: 'conexos', data: { byNF, consolidated, totalNFs: nfs.length } });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Erro ao buscar impostos do processo', details: err.message });
+  }
+});
+
 // GET /processes/:id
 router.get('/:id', async (req, res) => {
   const id = req.params.id;

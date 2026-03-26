@@ -266,6 +266,49 @@ export async function fetchExpensesByProcess(priCod: number, filCod?: number): P
 	}
 }
 
+export interface TaxNFItem {
+	impDesNome: string;
+	dtrPctAliquota: number | null;
+	dtrMnyValormn: number;
+	dtrMnyValorDolar: number;
+	dtrNumOrdem: number;
+}
+
+export interface ConsolidatedTaxItem extends TaxNFItem {
+	aliquotas: number[];
+}
+
+export interface TaxByNF {
+	docCod: number;
+	docEspNumero: string;
+	docDtaEmissao: string;
+	dpeNomPessoa: string;
+	impostos: TaxNFItem[];
+}
+
+export interface ProcessTaxesResponse {
+	byNF: TaxByNF[];
+	consolidated: ConsolidatedTaxItem[];
+	totalNFs: number;
+}
+
+/** Retorna impostos consolidados das NFs do processo (com297 + com017/encargosGerais) */
+export async function fetchTaxesByProcess(priCod: number, pesCod: number, filCod?: number): Promise<ProcessTaxesResponse> {
+	try {
+		const params = new URLSearchParams({ pesCod: String(pesCod) });
+		if (filCod) params.set('filCod', String(filCod));
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/taxes?${params}`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return { byNF: [], consolidated: [], totalNFs: 0 };
+		const data = await response.json();
+		return data?.data ?? { byNF: [], consolidated: [], totalNFs: 0 };
+	} catch {
+		return { byNF: [], consolidated: [], totalNFs: 0 };
+	}
+}
+
 export async function fetchCDI(startDate?: string, endDate?: string): Promise<any[]> {
 	const params = new URLSearchParams();
 	if (startDate) params.append('startDate', startDate);
