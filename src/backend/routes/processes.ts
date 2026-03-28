@@ -306,6 +306,20 @@ router.get('/:id/taxes', async (req, res) => {
   }
 });
 
+// GET /processes/:id/data-desembolso-imposto — Data de desembolso do imposto via com298→com308→fin010
+router.get('/:id/data-desembolso-imposto', async (req, res) => {
+  try {
+    const priCod = Number(req.params.id);
+    if (isNaN(priCod)) return res.status(400).json({ error: 'priCod inválido' });
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const result = await conexosService.getDataDesembolsoImposto(priCod, filCod);
+    res.json({ source: 'conexos', data: result });
+  } catch (err: any) {
+    console.error('[GET /processes/:id/data-desembolso-imposto] Error:', err.message);
+    res.status(502).json({ error: 'Erro ao buscar data desembolso imposto', details: err.message });
+  }
+});
+
 // GET /processes/:id
 router.get('/:id', async (req, res) => {
   const id = req.params.id;

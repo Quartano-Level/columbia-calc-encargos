@@ -151,6 +151,7 @@ export interface CalculatorFormState {
 	// Deck 2: Contract Info
 	dataFechamento: string;
 	dataConversao?: string;
+	dataDesembolsoImposto?: string;
 	dataFaturamento: string;
 	prazoEmDias: number; // INPUT
 	vencimentoCliente: string; // calculated

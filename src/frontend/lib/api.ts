@@ -309,6 +309,31 @@ export async function fetchTaxesByProcess(priCod: number, pesCod: number, filCod
 	}
 }
 
+export interface DataDesembolsoImpostoResponse {
+	dataDesembolso: string | null;
+	docCod: number | null;
+	titCod: number | null;
+	borCod: number | null;
+	warnings: string[];
+}
+
+const EMPTY_DESEMBOLSO: DataDesembolsoImpostoResponse = { dataDesembolso: null, docCod: null, titCod: null, borCod: null, warnings: [] };
+
+export async function fetchDataDesembolsoImposto(priCod: number, filCod?: number): Promise<DataDesembolsoImpostoResponse> {
+	try {
+		const params = filCod ? `?filCod=${filCod}` : '';
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/data-desembolso-imposto${params}`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return { ...EMPTY_DESEMBOLSO, warnings: [`HTTP ${response.status}`] };
+		const data = await response.json();
+		return data?.data ?? EMPTY_DESEMBOLSO;
+	} catch {
+		return { ...EMPTY_DESEMBOLSO, warnings: ['Erro de rede ao buscar data desembolso imposto'] };
+	}
+}
+
 export async function fetchCDI(startDate?: string, endDate?: string): Promise<any[]> {
 	const params = new URLSearchParams();
 	if (startDate) params.append('startDate', startDate);

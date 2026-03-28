@@ -2647,6 +2647,188 @@ class ConexosService {
       throw err;
     }
   }
+  // ── com298: Documentos a Pagar ──────────────────────────────────────────
+
+  async getDocumentosAPagar(priCod: number, filCod: number = config.conexos.filCod) {
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ["docCod","priCod","priEspRefcliente","docDtaEmissao","docEspNumero","docVldTipoAdto","tpdDesNome","pesCod","dpeNomPessoa","ufEspSigla","mnyBruto","docMnyValor","vldStatus","filCod","docTip"],
+      filterList: {
+        "priCod#EQ": priCod,
+        "tpdDesNome#LIKE": "D.I.",
+        "vldStatus#IN": ["1", "3"],
+      },
+      pageNumber: 1,
+      pageSize: 100,
+      serviceName: "com298",
+      orderList: { orderList: [{ propertyName: "docCod", order: "desc" }] },
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/com298/list';
+    boxLog('Conexos: getDocumentosAPagar', { priCod, filCod });
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      return resp.data?.rows || [];
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || [];
+      }
+      throw err;
+    }
+  }
+
+  // ── com308: Títulos de Financeiro a Pagar ──────────────────────────────
+
+  async getTitulosFinanceiroAPagar(docCod: number, filCod: number = config.conexos.filCod) {
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ["titCod","dupEspOrdem","titEspNumero","titDtaVencimento","titMnyValor","pago","titDtaPrevisao","titVldPagopor","titMnyTotPago","titVldStatus","filCod","docTip","docCod","titEspCodbar","titFltTaxaMneg","titMnyValorMneg","moeCodMneg","moeEspNome","gerNumJuros","gerDesJuros","gerNumDesconto","gerDesDesconto","bncCodInfo","bncDesNomeInfo","ccoCodInfo","ccPropriaInfo","vldBordero"],
+      filterList: {
+        "titVldStatus#EQ": "1",
+      },
+      pageNumber: 1,
+      pageSize: 100,
+      serviceName: "com308.finTituloFin",
+      orderList: { orderList: [{ propertyName: "titCod", order: "asc" }] },
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = `/com308/financeiroAPagar/list/${docCod}`;
+    boxLog('Conexos: getTitulosFinanceiroAPagar', { docCod, filCod });
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      return resp.data?.rows || [];
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || [];
+      }
+      throw err;
+    }
+  }
+
+  // ── fin010: Borderô de Pagamento ──────────────────────────────────────
+
+  async getBorderoByTitle(filCod: number, docCod: number, titCod: number) {
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ["borCod","borDtaMvto","gerNum","gerDes","vlrTotalLiquido","vlrTotalLiquidoSist","vlrTotalCheques","borVldFinalizado","filCod","borVldTipo"],
+      filterList: {
+        "borVldFinalizado#IN": ["0", "1"],
+        "fTbpFilCod#EQ": String(filCod),
+        "fTbpDocCod#EQ": String(docCod),
+        "fTbpTitCod#EQ": String(titCod),
+      },
+      pageNumber: 1,
+      pageSize: 20,
+      serviceName: "fin010",
+      orderList: { orderList: [{ propertyName: "borCod", order: "desc" }] },
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/fin010/list';
+    boxLog('Conexos: getBorderoByTitle', { filCod, docCod, titCod });
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      return resp.data?.rows || [];
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data?.rows || [];
+      }
+      throw err;
+    }
+  }
+
+  // ── Orquestrador: Data Desembolso Imposto (com298 → com308 → fin010) ─
+
+  async getDataDesembolsoImposto(priCod: number, filCod: number = config.conexos.filCod): Promise<{
+    dataDesembolso: string | null;
+    docCod: number | null;
+    titCod: number | null;
+    borCod: number | null;
+    warnings: string[];
+  }> {
+    const warnings: string[] = [];
+
+    // Step 1: com298 — Documento a Pagar tipo D.I.
+    const docs = await this.getDocumentosAPagar(priCod, filCod);
+    if (!docs || docs.length === 0) {
+      return { dataDesembolso: null, docCod: null, titCod: null, borCod: null, warnings: ['Nenhum documento a pagar tipo D.I. encontrado para o processo'] };
+    }
+    const doc = docs[0];
+    const docCod: number = doc.docCod;
+    const docFilCod: number = doc.filCod ?? filCod;
+
+    // Step 2: com308 — Títulos do Financeiro a Pagar
+    const titulos = await this.getTitulosFinanceiroAPagar(docCod, docFilCod);
+    if (!titulos || titulos.length === 0) {
+      return { dataDesembolso: null, docCod, titCod: null, borCod: null, warnings: ['Nenhum título financeiro encontrado para o documento a pagar'] };
+    }
+    if (titulos.length > 1) {
+      warnings.push(`Encontrado(s) ${titulos.length} título(s) financeiro(s) para o documento. Usando o primeiro (titCod=${titulos[0].titCod}).`);
+    }
+    const titCod: number = titulos[0].titCod;
+
+    // Step 3: fin010 — Borderô com data de desembolso
+    const borderos = await this.getBorderoByTitle(docFilCod, docCod, titCod);
+    if (!borderos || borderos.length === 0) {
+      return { dataDesembolso: null, docCod, titCod, borCod: null, warnings: [...warnings, 'Nenhum borderô de pagamento encontrado para o título'] };
+    }
+
+    const borDtaMvto = borderos[0].borDtaMvto;
+    let dataDesembolso: string | null = null;
+    if (borDtaMvto) {
+      if (typeof borDtaMvto === 'number') {
+        dataDesembolso = new Date(borDtaMvto).toISOString().split('T')[0];
+      } else if (typeof borDtaMvto === 'string') {
+        const d = new Date(borDtaMvto);
+        dataDesembolso = isNaN(d.getTime()) ? borDtaMvto : d.toISOString().split('T')[0];
+      }
+    }
+
+    boxLog('Conexos: getDataDesembolsoImposto result', { priCod, filCod, docCod, titCod, borCod: borderos[0].borCod, dataDesembolso, warnings });
+
+    return {
+      dataDesembolso,
+      docCod,
+      titCod,
+      borCod: borderos[0].borCod,
+      warnings,
+    };
+  }
 }
 
 export const conexosService = new ConexosService();

@@ -13,6 +13,7 @@ import {
 	saveCalculationV2,
 	fetchExpensesByProcess,
 	fetchTaxesByProcess,
+	fetchDataDesembolsoImposto,
 	type ProcessTaxesResponse,
 	type ConsolidatedTaxItem,
 } from "@/lib/api";
@@ -108,7 +109,7 @@ const DI_TAX_NAMES = [
 	'ANTIDUMPING',
 	'COFINS - NACIONALIZACAO',
 	'PIS - NACIONALIZACAO',
-	'IPI - NACIONALIZAÇÃO',
+	'IPI -  NACIONALIZAÇÃO',
 	'II - IMPOSTO DE IMPORTAÇÃO',
 ];
 
@@ -170,6 +171,7 @@ function toIsoDate(value: any): string {
 
 function getTabBaseDate(tab: CalculatorTab): string {
 	if (tab.type === 'contract') return tab.formState.dataFechamento || '';
+	if (tab.type === 'tax_di' || tab.type === 'tax_comercializacao') return tab.formState.dataDesembolsoImposto || '';
 	return tab.formState.dataConversao || '';
 }
 
@@ -245,7 +247,7 @@ export default function ProcessCalculatorPage() {
 		} else if (fs.vencimentoCliente) {
 			updateTabFormState(activeTab.id, prev => ({ ...prev, vencimentoCliente: '' }));
 		}
-	}, [activeTab?.id, activeTab?.type, activeTab?.formState.dataFechamento, activeTab?.formState.dataConversao, activeTab?.formState.prazoEmDias]);
+	}, [activeTab?.id, activeTab?.type, activeTab?.formState.dataFechamento, activeTab?.formState.dataConversao, activeTab?.formState.dataDesembolsoImposto, activeTab?.formState.prazoEmDias]);
 
 	useEffect(() => {
 		loadProcessData();
@@ -270,13 +272,16 @@ export default function ProcessCalculatorPage() {
 			const refExterna = processData?.priEspRefcliente || raw?.priEspRefcliente || processData?.processNumber || '';
 			const nomeCliente = processData?.dpeNomPessoa || raw?.dpeNomPessoa || processData?.clientName || '';
 			const incoterm = processData?.incoterm || raw?.incoterm || raw?.incEspSigla || '';
-			const pesCod = raw?.pesCod || processData?.pesCod;
+			const pesCod = raw?.pesCod || (processData as any)?.pesCod;
 
-			const [contractsData, expensesData, taxesDataRaw] = await Promise.all([
+			const [contractsData, expensesData, taxesDataRaw, desembolsoResult] = await Promise.all([
 				fetchContractsByProcess(priCod, filCod),
 				fetchExpensesByProcess(priCod, filCod),
 				pesCod ? fetchTaxesByProcess(priCod, Number(pesCod), filCod) : Promise.resolve<ProcessTaxesResponse>({ byNF: [], consolidated: [], totalNFs: 0 }),
+				fetchDataDesembolsoImposto(priCod, filCod),
 			]);
+			const dataDesembolsoImposto = desembolsoResult.dataDesembolso;
+			const desembolsoWarnings = desembolsoResult.warnings || [];
 
 			const contractTabs: CalculatorTab[] = await Promise.all(
 				(contractsData || []).map(async (contract: any) => {
@@ -370,6 +375,7 @@ export default function ProcessCalculatorPage() {
 						incoterm,
 						prazoEmDias: defaultPrazoEmDias,
 						valorMoedaNacional: 0,
+						dataDesembolsoImposto: dataDesembolsoImposto || '',
 					},
 					calculated: false,
 					taxaPeriod: 'anual' as TaxaPeriod,
@@ -391,6 +397,7 @@ export default function ProcessCalculatorPage() {
 						incoterm,
 						prazoEmDias: defaultPrazoEmDias,
 						valorMoedaNacional: 0,
+						dataDesembolsoImposto: dataDesembolsoImposto || '',
 					},
 					calculated: false,
 					taxaPeriod: 'anual' as TaxaPeriod,
@@ -402,8 +409,26 @@ export default function ProcessCalculatorPage() {
 			setSelectedComercializacao(new Set());
 			setSelectedDI(new Set());
 
-			const allTabs = [...contractTabs, ...expenseTabs, ...taxTabs];
+			const diTab = taxTabs.find(t => t.id === 'tax-di');
+			const comercializacaoTab = taxTabs.find(t => t.id === 'tax-comercializacao');
+
+			const allTabs = diTab
+				? [
+					diTab,
+					...expenseTabs,
+					...contractTabs,
+					...(comercializacaoTab ? [comercializacaoTab] : []),
+				]
+				: [
+					...contractTabs,
+					...expenseTabs,
+					...(comercializacaoTab ? [comercializacaoTab] : []),
+				];
 			setTabs(allTabs);
+
+			if (desembolsoWarnings.length > 0 && taxTabs.length > 0) {
+				desembolsoWarnings.forEach(w => showError(w));
+			}
 
 			if (contractIdParam && allTabs.length > 0) {
 				const match = allTabs.find(t => t.id === `contract-${contractIdParam}`);
@@ -1089,39 +1114,7 @@ export default function ProcessCalculatorPage() {
 					</CardContent>
 				</Card>
 
-				<Card>
-					<CardHeader className="bg-gray-50 border-b py-3">
-						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Prazo de Exposição</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-4">
-						<div className="grid grid-cols-3 gap-4">
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
-								<Input
-									type="number"
-									value={fs.prazoEmDias || ''}
-									onChange={(e) => updateTabFormState(tab.id, prev => ({
-										...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
-									}))}
-									className="border-blue-400 mt-1" placeholder="Ex: 30"
-								/>
-							</div>
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
-								<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
-							</div>
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor Base (BRL)</Label>
-								<Input
-									value={fs.valorMoedaNacional > 0 ? formatBRL(fs.valorMoedaNacional) : ''}
-									disabled
-									className="bg-gray-50 mt-1"
-									placeholder="Selecione impostos acima"
-								/>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
+				{renderTaxExposureCard(tab)}
 
 				{renderCalculationSection(tab)}
 			</div>
@@ -1249,42 +1242,63 @@ export default function ProcessCalculatorPage() {
 					</CardContent>
 				</Card>
 
-				<Card>
-					<CardHeader className="bg-gray-50 border-b py-3">
-						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Prazo de Exposição</CardTitle>
-					</CardHeader>
-					<CardContent className="pt-4">
-						<div className="grid grid-cols-3 gap-4">
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
-								<Input
-									type="number"
-									value={fs.prazoEmDias || ''}
-									onChange={(e) => updateTabFormState(tab.id, prev => ({
-										...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
-									}))}
-									className="border-blue-400 mt-1" placeholder="Ex: 30"
-								/>
-							</div>
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
-								<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
-							</div>
-							<div>
-								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor Base (BRL)</Label>
-								<Input
-									value={fs.valorMoedaNacional > 0 ? formatBRL(fs.valorMoedaNacional) : ''}
-									disabled
-									className="bg-gray-50 mt-1"
-									placeholder="Selecione impostos acima"
-								/>
-							</div>
-						</div>
-					</CardContent>
-				</Card>
+				{renderTaxExposureCard(tab)}
 
 				{renderCalculationSection(tab)}
 			</div>
+		);
+	}
+
+	function renderTaxExposureCard(tab: CalculatorTab) {
+		const fs = tab.formState;
+		return (
+			<Card>
+				<CardHeader className="bg-gray-50 border-b py-3">
+					<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Prazo de Exposição</CardTitle>
+				</CardHeader>
+				<CardContent className="pt-4">
+					<div className="grid grid-cols-4 gap-4">
+						<div>
+							<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Desembolso Imposto</Label>
+							<Input
+								type="date"
+								value={fs.dataDesembolsoImposto || ''}
+								onChange={(e) => updateTabFormState(tab.id, prev => ({
+									...prev, dataDesembolsoImposto: e.target.value
+								}))}
+								className="border-blue-400 mt-1"
+							/>
+							{!fs.dataDesembolsoImposto && (
+								<p className="text-xs text-amber-600 mt-1">Não encontrado no Conexos</p>
+							)}
+						</div>
+						<div>
+							<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
+							<Input
+								type="number"
+								value={fs.prazoEmDias || ''}
+								onChange={(e) => updateTabFormState(tab.id, prev => ({
+									...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
+								}))}
+								className="border-blue-400 mt-1" placeholder="Ex: 30"
+							/>
+						</div>
+						<div>
+							<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
+							<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
+						</div>
+						<div>
+							<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Valor Base (BRL)</Label>
+							<Input
+								value={fs.valorMoedaNacional > 0 ? formatBRL(fs.valorMoedaNacional) : ''}
+								disabled
+								className="bg-gray-50 mt-1"
+								placeholder="Selecione impostos acima"
+							/>
+						</div>
+					</div>
+				</CardContent>
+			</Card>
 		);
 	}
 
