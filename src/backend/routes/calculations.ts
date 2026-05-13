@@ -52,7 +52,7 @@ router.post('/save', async (req, res) => {
     res.json({ id: row?.id, status: 'calculated', version: row?.version ?? 1 });
   } catch (err: any) {
     if (err.name === 'ZodError') {
-      return res.status(422).json({ error: 'Payload inválido', details: err.errors });
+      return res.status(422).json({ error: 'Payload inválido', details: err.issues ?? err.errors });
     }
     res.status(500).json({ error: 'Erro ao salvar cálculo', details: err.message });
   }
