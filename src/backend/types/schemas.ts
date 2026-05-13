@@ -101,7 +101,8 @@ export const CalculationItemSchema = z.object({
     encargo: z.string(),
     dataConversao: z.string(),
     valorBRL: z.number(),
-    encargosProporcionais: z.number().nonnegative().optional(),
+    // Pode ser negativo quando valorBRL é um crédito/estorno (Conexos)
+    encargosProporcionais: z.number().optional(),
     valorFull: z.number().optional(),
     valorNacionalizacao: z.number().optional(),
     isDelta: z.boolean().optional(),
