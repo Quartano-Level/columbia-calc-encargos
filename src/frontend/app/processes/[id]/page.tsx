@@ -693,6 +693,7 @@ export default function ProcessCalculatorPage() {
 				totalEncargos: totalInterest,
 				totalValorBase,
 				calculadoEm: new Date().toISOString(),
+				filCod,
 			};
 
 			// 3. Salvar cálculo no banco ANTES de submeter ao Conexos
@@ -701,11 +702,13 @@ export default function ProcessCalculatorPage() {
 
 			// 4. Submeter ao Conexos usando o UUID do cálculo salvo
 			// encargosCalculados já está em BRL — taxaDolarFiscal deve ser 1 para evitar dupla conversão
+			// filCod é obrigatório quando o processo não está na filial padrão (priCod escopado a filial)
 			await submitToConexos(calculationId || processId, {
 				processId,
 				emissionDate,
 				totalInterest,
 				taxaDolarFiscal: 1,
+				filCod,
 			});
 
 			showSuccess('Encargos financeiros enviados ao Conexos com sucesso!');

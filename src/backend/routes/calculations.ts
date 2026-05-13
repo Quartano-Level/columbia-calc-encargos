@@ -104,6 +104,7 @@ router.post('/:id/submit', async (req, res) => {
     let emissionDate: string;
     let totalInterest: number;
     let taxaDolarFiscal: number;
+    let filCod: number | undefined;
     let calculationId: string | undefined;
 
     if (data) {
@@ -114,6 +115,7 @@ router.post('/:id/submit', async (req, res) => {
       emissionDate = req.body.emissionDate || payload.emissionDate || row.calculated_at || new Date().toISOString();
       totalInterest = Number(req.body.totalInterest) || payload.totalInterest || 0;
       taxaDolarFiscal = 1; // encargosCalculados já em BRL — sem conversão cambial aqui
+      filCod = Number(req.body.filCod) || Number(payload.filCod) || undefined;
       calculationId = data.id;
     } else if (req.body && req.body.totalInterest) {
       // Caminho 2: dados enviados diretamente pelo frontend (calculador)
@@ -121,6 +123,7 @@ router.post('/:id/submit', async (req, res) => {
       emissionDate = req.body.emissionDate || new Date().toISOString();
       totalInterest = req.body.totalInterest;
       taxaDolarFiscal = req.body.taxaDolarFiscal || 1;
+      filCod = Number(req.body.filCod) || undefined;
     } else {
       return res.status(404).json({
         error: 'Cálculo não encontrado',
@@ -128,7 +131,7 @@ router.post('/:id/submit', async (req, res) => {
       });
     }
 
-    const submitPayload = { processId, emissionDate, totalInterest, taxaDolarFiscal };
+    const submitPayload = { processId, emissionDate, totalInterest, taxaDolarFiscal, filCod };
     boxLog('Submitting to Conexos', submitPayload);
 
     const conexosResponse = await conexosService.submitExpense(submitPayload);

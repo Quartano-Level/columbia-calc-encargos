@@ -121,4 +121,6 @@ export const CalculationSavePayloadSchema = z.object({
   totalValorBase: z.number().nonnegative(),
   calculadoEm: z.string(),
   payloadVersion: z.literal(2),
+  // Filial Conexos do processo de origem (priCod é escopado a filCod)
+  filCod: z.number().int().positive().optional(),
 });

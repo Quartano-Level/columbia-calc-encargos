@@ -2581,6 +2581,7 @@ class ConexosService {
     emissionDate: string;
     totalInterest: number;
     taxaDolarFiscal: number;
+    filCod?: number;
   }) {
     await this.ensureSid();
 
@@ -2591,6 +2592,13 @@ class ConexosService {
 
     // Valor convertido para BRL (se taxaDolarFiscal for fornecida, senao usa valor direto)
     const valorBRL = data.totalInterest * (data.taxaDolarFiscal || 1);
+
+    // priCod é escopado a filial em Conexos: o mesmo número pode existir em
+    // várias filiais como processos distintos, então sempre passamos o filCod
+    // do processo de origem (default cai para config.conexos.filCod = 2).
+    const filCod = Number.isFinite(Number(data.filCod)) && Number(data.filCod) > 0
+      ? Number(data.filCod)
+      : config.conexos.filCod;
 
     const body = {
       moeCod: 790,
@@ -2618,13 +2626,13 @@ class ConexosService {
       prdCod: null,
       pidMnyValormn: Number(valorBRL.toFixed(2)),
       pidMnyValorMneg: Number(valorBRL.toFixed(2)),
-      filCod: String(config.conexos.filCod)
+      filCod: String(filCod)
     };
 
     const headers = {
       ...this.getAuthHeaders(),
       'content-type': 'application/json;charset=UTF-8',
-      'cnx-filcod': String(config.conexos.filCod),
+      'cnx-filcod': String(filCod),
       'cnx-usncod': config.conexos.usnCod,
       'cnx-datalanguage': 'pt',
       'accept': 'application/json, text/plain, */*',

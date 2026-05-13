@@ -174,6 +174,7 @@ export interface CalculationSavePayload {
 	totalValorBase: number;
 	calculadoEm: string;
 	payloadVersion: 2;
+	filCod?: number;
 }
 
 // BCB (Banco Central do Brasil) API types

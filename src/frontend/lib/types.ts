@@ -222,6 +222,8 @@ export interface CalculationPayloadV2 {
 	totalEncargos: number;
 	totalValorBase: number;
 	calculadoEm: string;
+	/** Filial Conexos do processo de origem (priCod é escopado a filCod) */
+	filCod?: number;
 }
 
 // ── Memória de Cálculo (Calculation Detail) ──────────────────────

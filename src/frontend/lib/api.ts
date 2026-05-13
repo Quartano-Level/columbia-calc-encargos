@@ -608,6 +608,7 @@ export interface SubmitToConexosPayload {
 	emissionDate: string;
 	totalInterest: number;
 	taxaDolarFiscal?: number;
+	filCod?: number;
 }
 
 export async function submitToConexos(id: string, payload: SubmitToConexosPayload): Promise<{ success: boolean; message: string }> {
