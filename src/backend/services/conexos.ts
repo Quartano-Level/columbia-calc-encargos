@@ -1874,18 +1874,28 @@ class ConexosService {
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Lista notas fiscais de saída (com297) vinculadas a um processo.
-   * Opcionalmente filtra por cliente (pesCod).
+   * Lista notas fiscais vinculadas a um processo.
+   *   tipo='saida'   → com297 (NFs emitidas pela Trading ao cliente final)
+   *   tipo='entrada' → com296 (NFs recebidas — ex.: NF de importação / DI)
+   * Opcionalmente filtra por cliente (pesCod) — aplicável apenas em saída.
    */
-  async listInvoicesByProcess(priCod: number, pesCod?: number, filCod: number = config.conexos.filCod) {
+  async listInvoicesByProcess(
+    priCod: number,
+    pesCod?: number,
+    filCod: number = config.conexos.filCod,
+    tipo: 'saida' | 'entrada' = 'saida',
+  ) {
     if (!priCod) return [];
     await this.ensureSid();
+
+    const serviceName = tipo === 'entrada' ? 'com296' : 'com297';
 
     const filterList: Record<string, any> = {
       "priCod#EQ": priCod,
       "vldStatus#IN": ["1", "2", "3", "7"],
     };
-    if (pesCod) {
+    // pesCod filtra cliente — só faz sentido em NF de saída
+    if (pesCod && tipo === 'saida') {
       filterList["pesCod#EQ"] = pesCod;
     }
 
@@ -1898,7 +1908,7 @@ class ConexosService {
       filterList,
       pageNumber: 1,
       pageSize: 200,
-      serviceName: "com297",
+      serviceName,
       orderList: { orderList: [{ propertyName: "docCod", order: "desc" }] }
     };
 
@@ -1911,11 +1921,11 @@ class ConexosService {
       'accept': 'application/json, text/plain, */*',
     };
 
-    const url = '/com297/list';
+    const url = `/${serviceName}/list`;
     try {
       const resp = await this.client.post(url, body, { headers });
       const rows = resp.data?.rows || [];
-      if (DEBUG_VERBOSE) console.log(`[com297] priCod=${priCod}: ${rows.length} NFs encontradas`);
+      if (DEBUG_VERBOSE) console.log(`[${serviceName}] priCod=${priCod}: ${rows.length} NFs encontradas`);
       return rows;
     } catch (err: any) {
       if (err.response?.status === 401) {
@@ -1923,7 +1933,7 @@ class ConexosService {
         const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
         return retryResp.data?.rows || [];
       }
-      console.error(`[com297] Erro ao listar NFs para priCod ${priCod}:`, err.message);
+      console.error(`[${serviceName}] Erro ao listar NFs para priCod ${priCod}:`, err.message);
       return [];
     }
   }

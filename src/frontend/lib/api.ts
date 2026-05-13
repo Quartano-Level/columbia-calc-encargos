@@ -280,6 +280,8 @@ export interface ConsolidatedTaxItem extends TaxNFItem {
 
 export interface TaxByNF {
 	docCod: number;
+	docTip?: number;
+	origem?: 'entrada' | 'saida';
 	docEspNumero: string;
 	docDtaEmissao: string;
 	dpeNomPessoa: string;
@@ -288,11 +290,23 @@ export interface TaxByNF {
 
 export interface ProcessTaxesResponse {
 	byNF: TaxByNF[];
+	byNFEntrada: TaxByNF[];
+	byNFSaida: TaxByNF[];
 	consolidated: ConsolidatedTaxItem[];
+	consolidatedEntrada: ConsolidatedTaxItem[];
+	consolidatedSaida: ConsolidatedTaxItem[];
 	totalNFs: number;
+	totalNFsEntrada: number;
+	totalNFsSaida: number;
 }
 
-/** Retorna impostos consolidados das NFs do processo (com297 + com017/encargosGerais) */
+const EMPTY_TAXES: ProcessTaxesResponse = {
+	byNF: [], byNFEntrada: [], byNFSaida: [],
+	consolidated: [], consolidatedEntrada: [], consolidatedSaida: [],
+	totalNFs: 0, totalNFsEntrada: 0, totalNFsSaida: 0,
+};
+
+/** Retorna impostos consolidados das NFs do processo. Backend busca com296 (entrada) + com297 (saída). */
 export async function fetchTaxesByProcess(priCod: number, pesCod: number, filCod?: number): Promise<ProcessTaxesResponse> {
 	try {
 		const params = new URLSearchParams({ pesCod: String(pesCod) });
@@ -301,11 +315,24 @@ export async function fetchTaxesByProcess(priCod: number, pesCod: number, filCod
 			method: "GET",
 			headers: { "Accept": "application/json" },
 		});
-		if (!response.ok) return { byNF: [], consolidated: [], totalNFs: 0 };
+		if (!response.ok) return EMPTY_TAXES;
 		const data = await response.json();
-		return data?.data ?? { byNF: [], consolidated: [], totalNFs: 0 };
+		const d = data?.data;
+		if (!d) return EMPTY_TAXES;
+		// Backend antigo (sem entrada/saida) — preencher campos vazios pra não quebrar consumidores
+		return {
+			byNF: d.byNF ?? [],
+			byNFEntrada: d.byNFEntrada ?? [],
+			byNFSaida: d.byNFSaida ?? [],
+			consolidated: d.consolidated ?? [],
+			consolidatedEntrada: d.consolidatedEntrada ?? [],
+			consolidatedSaida: d.consolidatedSaida ?? (d.consolidated ?? []),
+			totalNFs: d.totalNFs ?? 0,
+			totalNFsEntrada: d.totalNFsEntrada ?? 0,
+			totalNFsSaida: d.totalNFsSaida ?? d.totalNFs ?? 0,
+		};
 	} catch {
-		return { byNF: [], consolidated: [], totalNFs: 0 };
+		return EMPTY_TAXES;
 	}
 }
 

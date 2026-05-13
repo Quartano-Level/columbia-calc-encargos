@@ -214,93 +214,135 @@ router.get('/:id/expenses', async (req, res) => {
   }
 });
 
-// GET /processes/:id/taxes - impostos das NFs do processo (com297 + com017)
+// GET /processes/:id/taxes - impostos das NFs de entrada (com296) e saída (com297)
 router.get('/:id/taxes', async (req, res) => {
   try {
     const priCod = Number(req.params.id);
     const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
     const pesCod = req.query.pesCod ? parseInt(String(req.query.pesCod), 10) : undefined;
 
-    // 1. Listar NFs do processo (filtrando por pesCod quando disponível)
-    const nfsResp = await conexosService.listInvoicesByProcess(priCod, pesCod, filCod);
-    const nfs = Array.isArray(nfsResp) ? nfsResp : (nfsResp?.rows || []);
+    // 1. Listar NFs do processo — entrada (com296) e saída (com297) em paralelo
+    const [nfsEntradaResp, nfsSaidaResp] = await Promise.all([
+      conexosService.listInvoicesByProcess(priCod, undefined, filCod, 'entrada'),
+      conexosService.listInvoicesByProcess(priCod, pesCod, filCod, 'saida'),
+    ]);
+    const nfsEntrada = Array.isArray(nfsEntradaResp) ? nfsEntradaResp : (nfsEntradaResp?.rows || []);
+    const nfsSaida = Array.isArray(nfsSaidaResp) ? nfsSaidaResp : (nfsSaidaResp?.rows || []);
 
-    if (nfs.length === 0) {
-      return res.json({ source: 'conexos', data: { byNF: [], consolidated: [], totalNFs: 0 } });
-    }
-
-    // 2. Buscar encargosGerais de cada NF em paralelo (batches de 10)
+    // 2. Buscar encargosGerais de cada NF (batches de 10). docTip vem da própria NF.
     const BATCH = 10;
-    const byNF: any[] = [];
-    for (let i = 0; i < nfs.length; i += BATCH) {
-      const batch = nfs.slice(i, i + BATCH);
-      await Promise.all(batch.map(async (nf: any) => {
-        try {
-          const invFilCod = nf.filCod ?? filCod;
-          const encargos = await conexosService.getEncargosGeraisByInvoice(1, nf.docCod, invFilCod);
-          const impostos: any[] = encargos?.impostos || [];
-          byNF.push({
-            docCod: nf.docCod,
-            docEspNumero: nf.docEspNumero,
-            docDtaEmissao: nf.docDtaEmissao,
-            dpeNomPessoa: nf.dpeNomPessoa,
-            impostos: impostos.map((imp: any) => ({
-              impDesNome: imp.impDesNome,
-              dtrPctAliquota: imp.dtrPctAliquota,
-              dtrMnyValormn: imp.dtrMnyValormn ?? 0,
-              dtrMnyValorDolar: imp.dtrMnyValorDolar ?? 0,
-              dtrNumOrdem: imp.dtrNumOrdem ?? 0,
-            })),
-          });
-        } catch (err: any) {
-          console.warn(`[GET /processes/:id/taxes] Falha ao buscar encargos da NF docCod=${nf.docCod}:`, err?.message || err);
-        }
-      }));
-    }
+    const fetchByNF = async (
+      nfs: any[],
+      origem: 'entrada' | 'saida',
+    ): Promise<any[]> => {
+      const out: any[] = [];
+      for (let i = 0; i < nfs.length; i += BATCH) {
+        const batch = nfs.slice(i, i + BATCH);
+        await Promise.all(batch.map(async (nf: any) => {
+          try {
+            const invFilCod = nf.filCod ?? filCod;
+            const docTip = Number(nf.docTip ?? (origem === 'entrada' ? 2 : 1));
+            const encargos = await conexosService.getEncargosGeraisByInvoice(docTip, nf.docCod, invFilCod);
+            const impostos: any[] = encargos?.impostos || [];
+            out.push({
+              docCod: nf.docCod,
+              docTip,
+              origem,
+              docEspNumero: nf.docEspNumero,
+              docDtaEmissao: nf.docDtaEmissao,
+              dpeNomPessoa: nf.dpeNomPessoa,
+              impostos: impostos.map((imp: any) => ({
+                impDesNome: imp.impDesNome,
+                dtrPctAliquota: imp.dtrPctAliquota,
+                dtrMnyValormn: imp.dtrMnyValormn ?? 0,
+                dtrMnyValorDolar: imp.dtrMnyValorDolar ?? 0,
+                dtrNumOrdem: imp.dtrNumOrdem ?? 0,
+              })),
+            });
+          } catch (err: any) {
+            console.warn(`[GET /processes/:id/taxes][${origem}] Falha ao buscar encargos da NF docCod=${nf.docCod}:`, err?.message || err);
+          }
+        }));
+      }
+      return out;
+    };
 
-    // 3. Consolidar impostos por impDesNome
-    const consolidationMap = new Map<string, {
+    const [byNFEntrada, byNFSaida] = await Promise.all([
+      fetchByNF(nfsEntrada, 'entrada'),
+      fetchByNF(nfsSaida, 'saida'),
+    ]);
+
+    // 3. Consolidar impostos por impDesNome em uma fonte (entrada ou saída).
+    type ConsolidatedItem = {
       impDesNome: string;
-      aliquotas: Set<number>;
+      aliquotas: number[];
+      dtrPctAliquota: number | null;
       dtrMnyValormn: number;
       dtrMnyValorDolar: number;
       dtrNumOrdem: number;
-    }>();
-
-    for (const nf of byNF) {
-      for (const imp of nf.impostos) {
-        const key = imp.impDesNome;
-        if (!consolidationMap.has(key)) {
-          consolidationMap.set(key, {
-            impDesNome: key,
-            aliquotas: new Set(),
-            dtrMnyValormn: 0,
-            dtrMnyValorDolar: 0,
-            dtrNumOrdem: imp.dtrNumOrdem,
-          });
+    };
+    const consolidate = (rows: any[]): ConsolidatedItem[] => {
+      const map = new Map<string, {
+        impDesNome: string;
+        aliquotas: Set<number>;
+        dtrMnyValormn: number;
+        dtrMnyValorDolar: number;
+        dtrNumOrdem: number;
+      }>();
+      for (const nf of rows) {
+        for (const imp of nf.impostos) {
+          const key = imp.impDesNome;
+          if (!map.has(key)) {
+            map.set(key, {
+              impDesNome: key,
+              aliquotas: new Set(),
+              dtrMnyValormn: 0,
+              dtrMnyValorDolar: 0,
+              dtrNumOrdem: imp.dtrNumOrdem,
+            });
+          }
+          const entry = map.get(key)!;
+          if (imp.dtrPctAliquota != null) entry.aliquotas.add(imp.dtrPctAliquota);
+          entry.dtrMnyValormn += imp.dtrMnyValormn ?? 0;
+          entry.dtrMnyValorDolar += imp.dtrMnyValorDolar ?? 0;
+          if (imp.dtrNumOrdem < entry.dtrNumOrdem) entry.dtrNumOrdem = imp.dtrNumOrdem;
         }
-        const entry = consolidationMap.get(key)!;
-        if (imp.dtrPctAliquota != null) entry.aliquotas.add(imp.dtrPctAliquota);
-        entry.dtrMnyValormn += imp.dtrMnyValormn ?? 0;
-        entry.dtrMnyValorDolar += imp.dtrMnyValorDolar ?? 0;
-        if (imp.dtrNumOrdem < entry.dtrNumOrdem) entry.dtrNumOrdem = imp.dtrNumOrdem;
       }
-    }
+      return Array.from(map.values())
+        .map(entry => ({
+          impDesNome: entry.impDesNome,
+          aliquotas: Array.from(entry.aliquotas).sort((a, b) => a - b),
+          dtrPctAliquota: Array.from(entry.aliquotas)[0] ?? null,
+          dtrMnyValormn: entry.dtrMnyValormn,
+          dtrMnyValorDolar: entry.dtrMnyValorDolar,
+          dtrNumOrdem: entry.dtrNumOrdem,
+        }))
+        .sort((a, b) => a.dtrNumOrdem !== b.dtrNumOrdem
+          ? a.dtrNumOrdem - b.dtrNumOrdem
+          : a.impDesNome.localeCompare(b.impDesNome, 'pt-BR'));
+    };
 
-    const consolidated = Array.from(consolidationMap.values())
-      .map(entry => ({
-        impDesNome: entry.impDesNome,
-        aliquotas: Array.from(entry.aliquotas).sort((a, b) => a - b),
-        dtrPctAliquota: Array.from(entry.aliquotas)[0] ?? null,
-        dtrMnyValormn: entry.dtrMnyValormn,
-        dtrMnyValorDolar: entry.dtrMnyValorDolar,
-        dtrNumOrdem: entry.dtrNumOrdem,
-      }))
-      .sort((a, b) => a.dtrNumOrdem !== b.dtrNumOrdem
-        ? a.dtrNumOrdem - b.dtrNumOrdem
-        : a.impDesNome.localeCompare(b.impDesNome, 'pt-BR'));
+    const consolidatedEntrada = consolidate(byNFEntrada);
+    const consolidatedSaida = consolidate(byNFSaida);
 
-    res.json({ source: 'conexos', data: { byNF, consolidated, totalNFs: nfs.length } });
+    // União para retrocompatibilidade (campo `consolidated` legado).
+    const consolidated = consolidate([...byNFEntrada, ...byNFSaida]);
+    const byNF = [...byNFSaida, ...byNFEntrada];
+
+    res.json({
+      source: 'conexos',
+      data: {
+        byNF,
+        byNFEntrada,
+        byNFSaida,
+        consolidated,
+        consolidatedEntrada,
+        consolidatedSaida,
+        totalNFs: nfsEntrada.length + nfsSaida.length,
+        totalNFsEntrada: nfsEntrada.length,
+        totalNFsSaida: nfsSaida.length,
+      },
+    });
   } catch (err: any) {
     res.status(502).json({ error: 'Erro ao buscar impostos do processo', details: err.message });
   }

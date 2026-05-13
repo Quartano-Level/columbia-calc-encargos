@@ -356,9 +356,18 @@ export default function ProcessCalculatorPage() {
 				};
 			});
 
-			// Abas de impostos: Comercialização (delta) e IMPOSTOS (DI) (valor direto)
-			const comercializacaoDeltas = calcComercializacaoDeltas(taxesDataRaw.consolidated);
-			const diTaxes = filterDITaxes(taxesDataRaw.consolidated);
+			// Abas de impostos:
+			//   Comercialização (delta) → NF de Saída (com297): markup/diferença sobre nacionalização
+			//   IMPOSTOS (DI) (valor direto) → NF de Entrada (com296): impostos calculados na DI/importação
+			// Fallback para `consolidated` (união) quando o backend antigo não trouxer os campos separados.
+			const comercializacaoSource = taxesDataRaw.consolidatedSaida?.length
+				? taxesDataRaw.consolidatedSaida
+				: taxesDataRaw.consolidated;
+			const diSource = taxesDataRaw.consolidatedEntrada?.length
+				? taxesDataRaw.consolidatedEntrada
+				: taxesDataRaw.consolidated;
+			const comercializacaoDeltas = calcComercializacaoDeltas(comercializacaoSource);
+			const diTaxes = filterDITaxes(diSource);
 
 			const taxTabs: CalculatorTab[] = [];
 
