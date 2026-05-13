@@ -128,7 +128,7 @@ export interface ConexosSubmission {
 /** Item individual de cálculo (contrato ou despesa) */
 export interface CalculationItem {
 	id: string;
-	type: 'contract' | 'expense';
+	type: 'contract' | 'expense' | 'tax' | 'tax_comercializacao' | 'tax_di';
 	label: string;
 	valorBase: number;
 	moeda: string;
@@ -155,6 +155,9 @@ export interface CalculationItem {
 		dataConversao: string;
 		valorBRL: number;
 		encargosProporcionais?: number;
+		valorFull?: number;
+		valorNacionalizacao?: number;
+		isDelta?: boolean;
 	}>;
 }
 

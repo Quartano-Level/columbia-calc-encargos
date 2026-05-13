@@ -75,7 +75,7 @@ export const CalculationResultSchema = z.object({
 
 export const CalculationItemSchema = z.object({
   id: z.string(),
-  type: z.enum(['contract', 'expense']),
+  type: z.enum(['contract', 'expense', 'tax', 'tax_comercializacao', 'tax_di']),
   label: z.string(),
   valorBase: z.number().nonnegative(),
   moeda: z.string(),
@@ -102,6 +102,9 @@ export const CalculationItemSchema = z.object({
     dataConversao: z.string(),
     valorBRL: z.number(),
     encargosProporcionais: z.number().nonnegative().optional(),
+    valorFull: z.number().optional(),
+    valorNacionalizacao: z.number().optional(),
+    isDelta: z.boolean().optional(),
   })).optional(),
 });
 
