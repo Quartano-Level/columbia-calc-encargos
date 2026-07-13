@@ -37,8 +37,14 @@ class ConexosService {
 
   async login(sessionToKill?: string): Promise<void> {
     boxLog('Conexos: login attempt', { sessionToKill });
-    const username = process.env.CONEXOS_USERNAME || 'MPS_FRANCINEI';
-    const password = process.env.CONEXOS_PASSWORD || '@Amarelo522';
+    const username = process.env.CONEXOS_USERNAME;
+    const password = process.env.CONEXOS_PASSWORD;
+    if (!username || !password) {
+      throw new Error(
+        'CONEXOS_USERNAME e CONEXOS_PASSWORD são obrigatórios. ' +
+          'Defina-os nas Environment Variables (nunca hardcode credenciais no código).'
+      );
+    }
     if (DEBUG_VERBOSE) console.log('[Conexos] Tentando login...', sessionToKill ? `(matando sessão ${sessionToKill.substring(0, 8)}...)` : '');
 
     const body: { username: string; password: string; sessionToKill?: string } = { username, password };
