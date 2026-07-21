@@ -177,6 +177,8 @@ export interface CalculatorFormState {
 export interface CalculationItem {
 	id: string;
 	type: 'contract' | 'expense' | 'tax' | 'tax_comercializacao' | 'tax_di';
+	/** Origem do item: 'conexos' (padrão) ou 'manual' quando digitado pelo usuário (ex.: contrato de câmbio manual) */
+	origem?: 'conexos' | 'manual';
 	label: string;
 	valorBase: number;
 	moeda: string;

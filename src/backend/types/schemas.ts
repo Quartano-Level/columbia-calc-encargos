@@ -76,6 +76,9 @@ export const CalculationResultSchema = z.object({
 export const CalculationItemSchema = z.object({
   id: z.string(),
   type: z.enum(['contract', 'expense', 'tax', 'tax_comercializacao', 'tax_di']),
+  // Origem do item: 'conexos' (padrão) ou 'manual' quando digitado pelo usuário.
+  // Opcional para retrocompatibilidade com payloads antigos (tratados como 'conexos').
+  origem: z.enum(['conexos', 'manual']).optional(),
   label: z.string(),
   valorBase: z.number().nonnegative(),
   moeda: z.string(),
