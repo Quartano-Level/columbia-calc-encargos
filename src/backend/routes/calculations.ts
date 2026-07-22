@@ -7,7 +7,12 @@ const router = Router();
 // POST /calculate
 import { orchestrateCalculation } from '../services/calculation.js';
 import { conexosService } from '../services/conexos.js';
+import { config } from '../config.js';
 import { CalculationSavePayloadSchema } from '../types/schemas.js';
+
+// Forma de rateio da despesa quando o encargo é rateado entre ODFs (Pernod).
+// Observado numa despesa criada manualmente com rateio por ODF; validar no 1º envio real.
+const FORMA_RETEIO_ODF = 7;
 import { saveCalculation } from '../services/supabase.js';
 import { calculationPayloadHash } from '../utils/index.js';
 
@@ -131,10 +136,43 @@ router.post('/:id/submit', async (req, res) => {
       });
     }
 
-    const submitPayload = { processId, emissionDate, totalInterest, taxaDolarFiscal, filCod };
-    boxLog('Submitting to Conexos', submitPayload);
+    // ODFs para rateio do encargo (Pernod). Vazio => sem rateio (fluxo padrão).
+    const odfCods: number[] = Array.isArray(req.body?.odfCods)
+      ? req.body.odfCods.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n > 0)
+      : [];
+    const rateado = odfCods.length > 0;
+
+    const submitPayload = {
+      processId,
+      emissionDate,
+      totalInterest,
+      taxaDolarFiscal,
+      filCod,
+      // Quando há rateio por ODF, a despesa é criada em modo abrangência (formaReteio=7).
+      ...(rateado ? { formaReteio: FORMA_RETEIO_ODF } : {}),
+    };
+    boxLog('Submitting to Conexos', { ...submitPayload, odfCods });
 
     const conexosResponse = await conexosService.submitExpense(submitPayload);
+
+    // Rateio: vincula a despesa recém-criada às ODFs selecionadas.
+    // O pidCodSeq (e ctpCod/prjCod) vêm da resposta da criação da despesa.
+    let rateioResponse: any = null;
+    if (rateado) {
+      const cr = (conexosResponse ?? {}) as any;
+      const pidCodSeq = Number(cr.pidCodSeq);
+      if (!Number.isFinite(pidCodSeq)) {
+        throw new Error('Rateio por ODF: pidCodSeq ausente na resposta da criação da despesa (não é possível ratear).');
+      }
+      rateioResponse = await conexosService.rateioDespesaOdf({
+        filCod: Number(cr.filCod ?? filCod ?? config.conexos.filCod),
+        priCod: cr.priCod ?? processId,
+        ctpCod: Number(cr.ctpCod ?? config.conexos.ctpCod),
+        prjCod: Number(cr.prjCod ?? 1),
+        pidCodSeq,
+        odfCods,
+      });
+    }
 
     // RF-04: Atualizar status no banco após submissão com sucesso
     if (calculationId) {
@@ -145,14 +183,14 @@ router.post('/:id/submit', async (req, res) => {
     await saveSubmissionLog({
       calculationId: calculationId || undefined,
       processoId: String(processId),
-      requestPayload: submitPayload,
-      responsePayload: conexosResponse ?? {},
+      requestPayload: { ...submitPayload, odfCods },
+      responsePayload: { despesa: conexosResponse ?? {}, rateio: rateioResponse },
       responseStatus: 200,
     });
 
     logEvent('calculation_submitted', { calculationId: calculationId || processId });
 
-    res.json({ status: 'submitted', calculationId: calculationId || processId, conexosResponse });
+    res.json({ status: 'submitted', calculationId: calculationId || processId, conexosResponse, rateioResponse, odfCods });
   } catch (err: any) {
     boxLog('Submission Error', { error: err.message, data: err.response?.data });
     res.status(500).json({ error: 'Erro ao submeter cálculo', details: err.message });

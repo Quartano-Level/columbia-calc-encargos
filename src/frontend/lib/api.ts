@@ -229,6 +229,35 @@ export async function fetchContractsByProcess(priCod: number, filCod?: number): 
 	return data?.data || [];
 }
 
+/** ODF (Ordem de Faturamento) de um processo — usada no rateio de encargo (Pernod) */
+export interface OdfItem {
+	odfCod: number;
+	pesCod?: number;
+	dpeNomPessoa?: string;
+	odfVldTipoes?: number;
+	produto?: string;
+	prdDesNome?: string;
+	serieLote?: string;
+	filCod?: number;
+	priCod?: number;
+}
+
+/** Lista as ODFs de um processo (para seleção de rateio do encargo) */
+export async function fetchOdfsByProcess(priCod: number, filCod?: number): Promise<OdfItem[]> {
+	try {
+		const params = filCod ? `?filCod=${filCod}` : '';
+		const response = await fetch(`${API_BASE_URL}/processes/${priCod}/odfs${params}`, {
+			method: "GET",
+			headers: { "Accept": "application/json" },
+		});
+		if (!response.ok) return [];
+		const data = await response.json();
+		return Array.isArray(data?.data) ? data.data : [];
+	} catch {
+		return [];
+	}
+}
+
 /** Retorna o valor de encargos financeiros do processo (pidMnyValormn onde ctpDesNome = 'ENCARGOS FINANCEIROS') */
 export async function fetchEncargosFinanceirosByProcess(priCod: number): Promise<number | null> {
 	try {
@@ -636,6 +665,8 @@ export interface SubmitToConexosPayload {
 	totalInterest: number;
 	taxaDolarFiscal?: number;
 	filCod?: number;
+	/** ODFs para rateio do encargo (Pernod). Vazio/ausente = sem rateio. */
+	odfCods?: number[];
 }
 
 export async function submitToConexos(id: string, payload: SubmitToConexosPayload): Promise<{ success: boolean; message: string }> {

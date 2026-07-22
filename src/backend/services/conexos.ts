@@ -2598,6 +2598,14 @@ class ConexosService {
     totalInterest: number;
     taxaDolarFiscal: number;
     filCod?: number;
+    /**
+     * Forma de rateio da despesa (pidVldFormaReteio).
+     * 2 = padrão (sem rateio por ODF). 7 = rateio por ODF/abrangência — usado quando o
+     * encargo será rateado entre ODFs (Pernod) via /imp021/ProcessoDespesasOdf logo em seguida.
+     * ⚠️ O valor 7 foi observado numa despesa criada manualmente com rateio por ODF;
+     * validar no 1º envio real de produção.
+     */
+    formaReteio?: number;
   }) {
     await this.ensureSid();
 
@@ -2626,7 +2634,7 @@ class ConexosService {
       idtCod: 1,
       pidVldStatus: 1,
       impCod: config.conexos.impCod,
-      pidVldFormaReteio: 2,
+      pidVldFormaReteio: data.formaReteio ?? 2,
       pidDtaTaxas: timestamp,
       pdiVldOrigemDesp: 1,
       pidVldTipo: 1,
@@ -2671,6 +2679,101 @@ class ConexosService {
       throw err;
     }
   }
+
+  // ── imp021: ODFs (Ordens de Faturamento) de um processo p/ rateio ────────
+
+  /**
+   * Lista as ODFs (Ordens de Faturamento) de um processo, para o usuário escolher
+   * quais o encargo será rateado. Leitura — POST /imp021/ProcessoDespesasOdf/listOdf.
+   */
+  async listOdfsByProcess(priCod: string | number, filCod: number = config.conexos.filCod) {
+    await this.ensureSid();
+
+    const body = {
+      fieldList: ["odfCod", "pesCod", "dpeNomPessoa", "odfVldTipoes", "produto", "prdDesNome", "serieLote", "filCod", "priCod"],
+      filterList: { "priCod#EQ": String(priCod) },
+      pageNumber: 1,
+      pageSize: 100,
+      serviceName: "imp021.ImpProcessoDespesasOdf",
+      orderList: { orderList: [{ propertyName: "odfCod", order: "desc" }] },
+    };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/imp021/ProcessoDespesasOdf/listOdf';
+    boxLog('Conexos: listOdfsByProcess', { priCod, filCod });
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      return resp.data;
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data;
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Rateia uma despesa já criada entre as ODFs selecionadas (abrangência do rateio).
+   * Escrita — POST /imp021/ProcessoDespesasOdf, um item por odfCod. O Conexos apura
+   * a divisão do valor entre as ODFs; enviamos apenas os odfCod (sem valor por ODF).
+   */
+  async rateioDespesaOdf(data: {
+    filCod: number;
+    priCod: string | number;
+    ctpCod: number;
+    prjCod: number;
+    pidCodSeq: number;
+    odfCods: number[];
+  }) {
+    await this.ensureSid();
+
+    const items = data.odfCods.map(odfCod => ({
+      filCod: String(data.filCod),
+      priCod: String(data.priCod),
+      odfCod,
+      prjCod: data.prjCod,
+      ctpCod: data.ctpCod,
+      pidCodSeq: data.pidCodSeq,
+    }));
+    const body = { items };
+
+    const headers = {
+      ...this.getAuthHeaders(),
+      'content-type': 'application/json;charset=UTF-8',
+      'cnx-filcod': String(data.filCod),
+      'cnx-usncod': config.conexos.usnCod,
+      'cnx-datalanguage': 'pt',
+      'accept': 'application/json, text/plain, */*',
+    };
+
+    const url = '/imp021/ProcessoDespesasOdf';
+    boxLog('Conexos: rateioDespesaOdf Payload', body);
+    try {
+      const resp = await this.client.post(url, body, { headers });
+      boxLog('Conexos: rateioDespesaOdf Response', resp.data);
+      return resp.data;
+    } catch (err: any) {
+      if (err.response && err.response.status === 401) {
+        await this.login();
+        const retryResp = await this.client.post(url, body, { headers: { ...headers, ...this.getAuthHeaders() } });
+        return retryResp.data;
+      }
+      const errorData = err.response?.data;
+      console.error('[Conexos] ERRO ao ratear despesa por ODF:', errorData || err.message);
+      throw err;
+    }
+  }
+
   // ── com298: Documentos a Pagar ──────────────────────────────────────────
 
   async getDocumentosAPagar(priCod: number, filCod: number = config.conexos.filCod) {

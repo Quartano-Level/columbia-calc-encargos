@@ -181,6 +181,21 @@ router.get('/:priCod/contracts', async (req, res) => {
   }
 });
 
+// GET /processes/:priCod/odfs - ODFs (Ordens de Faturamento) do processo p/ rateio de encargo
+router.get('/:priCod/odfs', async (req, res) => {
+  try {
+    const priCod = parseInt(req.params.priCod, 10);
+    if (isNaN(priCod)) {
+      return res.status(400).json({ error: 'priCod inválido' });
+    }
+    const filCod = req.query.filCod ? parseInt(String(req.query.filCod), 10) : undefined;
+    const result = await conexosService.listOdfsByProcess(priCod, filCod);
+    res.json({ source: 'conexos', data: result?.rows ?? [], count: result?.count ?? 0 });
+  } catch (err: any) {
+    res.status(502).json({ error: 'Erro ao buscar ODFs do Conexos', details: err.message });
+  }
+});
+
 // GET /processes/:priCod/contracts/:imcCod/enriched - dados enriquecidos de um contrato
 router.get('/:priCod/contracts/:imcCod/enriched', async (req, res) => {
   try {
