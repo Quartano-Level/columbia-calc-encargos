@@ -14,8 +14,10 @@ import {
 	fetchExpensesByProcess,
 	fetchTaxesByProcess,
 	fetchDataDesembolsoImposto,
+	fetchOdfsByProcess,
 	type ProcessTaxesResponse,
 	type ConsolidatedTaxItem,
+	type OdfItem,
 } from "@/lib/api";
 import { calcularEncargos } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,6 +33,10 @@ import { NumericFormat } from "react-number-format";
 import { useToast } from "@/hooks/use-toast";
 
 type TaxaPeriod = 'anual' | 'mensal' | 'diario';
+
+// Rateio de encargo por ODF é exclusivo da Pernod (pesCod 213).
+// PERNOD RICARD BRASIL INDUSTRIA E COMERCIO LTDA.
+const PERNOD_PESCOD = 213;
 
 interface CalculatorTab {
 	id: string;
@@ -211,6 +217,12 @@ export default function ProcessCalculatorPage() {
 	const [selectedComercializacao, setSelectedComercializacao] = useState<Set<string>>(new Set());
 	const [selectedDI, setSelectedDI] = useState<Set<string>>(new Set());
 
+	// Rateio por ODF (Pernod): pesCod do processo, ODFs disponíveis e seleção do usuário.
+	const [pesCod, setPesCod] = useState<number | null>(null);
+	const [odfs, setOdfs] = useState<OdfItem[]>([]);
+	const [selectedOdfs, setSelectedOdfs] = useState<Set<number>>(new Set());
+	const isPernod = pesCod === PERNOD_PESCOD;
+
 	const activeTab = tabs.find(t => t.id === activeTabId);
 
 	const showError = useCallback((message: string) => {
@@ -275,6 +287,16 @@ export default function ProcessCalculatorPage() {
 			const nomeCliente = processData?.dpeNomPessoa || raw?.dpeNomPessoa || processData?.clientName || '';
 			const incoterm = processData?.incoterm || raw?.incoterm || raw?.incEspSigla || '';
 			const pesCod = raw?.pesCod || (processData as any)?.pesCod;
+
+			// Rateio por ODF é exclusivo da Pernod: guarda o pesCod e busca as ODFs do processo.
+			const pesCodNum = pesCod ? Number(pesCod) : null;
+			setPesCod(pesCodNum);
+			setSelectedOdfs(new Set());
+			if (pesCodNum === PERNOD_PESCOD) {
+				fetchOdfsByProcess(priCod, filCod).then(setOdfs).catch(() => setOdfs([]));
+			} else {
+				setOdfs([]);
+			}
 
 			const [contractsData, expensesData, taxesDataRaw, desembolsoResult] = await Promise.all([
 				fetchContractsByProcess(priCod, filCod),
@@ -616,6 +638,12 @@ export default function ProcessCalculatorPage() {
 			return;
 		}
 
+		// Pernod: exige seleção de ao menos uma ODF (rateio) quando há ODFs disponíveis.
+		if (isPernod && odfs.length > 0 && selectedOdfs.size === 0) {
+			showError('Selecione ao menos uma ODF na aba Resumo para vincular (ratear) o encargo antes de enviar.');
+			return;
+		}
+
 		try {
 			setSubmitting(true);
 			const totalInterest = calculatedTabs.reduce((sum, t) => sum + (t.formState.encargosCalculados || 0), 0);
@@ -758,9 +786,14 @@ export default function ProcessCalculatorPage() {
 				totalInterest,
 				taxaDolarFiscal: 1,
 				filCod,
+				// Pernod: ratea o encargo entre as ODFs selecionadas na aba Resumo.
+				...(isPernod && selectedOdfs.size > 0 ? { odfCods: Array.from(selectedOdfs) } : {}),
 			});
 
-			showSuccess('Encargos financeiros enviados ao Conexos com sucesso!');
+			const odfMsg = isPernod && selectedOdfs.size > 0
+				? ` (rateado em ${selectedOdfs.size} ODF${selectedOdfs.size > 1 ? 's' : ''})`
+				: '';
+			showSuccess('Encargos financeiros enviados ao Conexos com sucesso!' + odfMsg);
 			await loadProcessData();
 		} catch (err: any) {
 			showError('Erro ao enviar para o Conexos: ' + (err.message || 'Erro desconhecido'));
@@ -1603,12 +1636,22 @@ export default function ProcessCalculatorPage() {
 		);
 	}
 
+	function toggleOdf(odfCod: number) {
+		setSelectedOdfs(prev => {
+			const next = new Set(prev);
+			if (next.has(odfCod)) next.delete(odfCod); else next.add(odfCod);
+			return next;
+		});
+	}
+
 	function renderOverview() {
 		const totalEncargos = tabs.reduce((sum, t) => sum + t.formState.encargosCalculados, 0);
 		const calculatedCount = tabs.filter(t => t.calculated).length;
 		const contractCount = tabs.filter(t => t.type === 'contract').length;
 		const expenseCount = tabs.filter(t => t.type === 'expense').length;
 		const taxCount = tabs.filter(t => t.type === 'tax_comercializacao' || t.type === 'tax_di').length;
+		const allOdfsSelected = odfs.length > 0 && odfs.every(o => selectedOdfs.has(o.odfCod));
+		const toggleAllOdfs = () => setSelectedOdfs(allOdfsSelected ? new Set() : new Set(odfs.map(o => o.odfCod)));
 
 		return (
 			<div className="space-y-6">
@@ -1703,6 +1746,59 @@ export default function ProcessCalculatorPage() {
 						</table>
 					</CardContent>
 				</Card>
+
+				{isPernod && (
+					<Card className="border-amber-200">
+						<CardHeader className="bg-amber-50 border-b py-3">
+							<div className="flex items-center justify-between">
+								<CardTitle className="text-sm font-semibold text-gray-700 uppercase tracking-wide flex items-center gap-2">
+									Rateio por ODF
+									<span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Pernod</span>
+								</CardTitle>
+								{odfs.length > 0 && (
+									<Button variant="ghost" size="sm" onClick={toggleAllOdfs} className="text-xs">
+										{allOdfsSelected ? 'Desmarcar Todas' : 'Selecionar Todas'}
+									</Button>
+								)}
+							</div>
+						</CardHeader>
+						<CardContent className="pt-4">
+							<p className="text-xs text-gray-500 mb-3">
+								Selecione a(s) ODF(s) a que este encargo se refere. O encargo sobe como uma despesa única e o Conexos ratea o valor entre as ODFs vinculadas.
+							</p>
+							{odfs.length === 0 ? (
+								<p className="text-sm text-gray-400">Nenhuma ODF encontrada para este processo.</p>
+							) : (
+								<div className="space-y-1">
+									{odfs.map(odf => {
+										const checked = selectedOdfs.has(odf.odfCod);
+										const desc = [odf.prdDesNome || odf.produto, odf.serieLote ? `série/lote ${odf.serieLote}` : ''].filter(Boolean).join(' · ');
+										return (
+											<label
+												key={odf.odfCod}
+												className={`flex items-center gap-3 px-3 py-2 rounded border cursor-pointer transition-colors ${checked ? 'bg-amber-50 border-amber-200' : 'border-gray-100 hover:bg-gray-50'}`}
+											>
+												<input
+													type="checkbox"
+													checked={checked}
+													onChange={() => toggleOdf(odf.odfCod)}
+													className="h-4 w-4 rounded border-gray-300 text-amber-600"
+												/>
+												<span className="text-sm font-medium text-gray-800 shrink-0">ODF {odf.odfCod}</span>
+												{desc && <span className="text-xs text-gray-500 truncate">{desc}</span>}
+											</label>
+										);
+									})}
+								</div>
+							)}
+							{selectedOdfs.size > 0 && (
+								<p className="text-xs text-amber-700 mt-3 font-medium">
+									Encargo vinculado a: ODF {Array.from(selectedOdfs).sort((a, b) => a - b).join('; ')}
+								</p>
+							)}
+						</CardContent>
+					</Card>
+				)}
 
 				<div className="flex gap-4">
 					<Button
