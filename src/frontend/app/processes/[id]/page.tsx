@@ -43,6 +43,8 @@ interface CalculatorTab {
 	taxaPeriod: TaxaPeriod;
 	taxaInputValue: number | null;
 	iof: boolean;
+	/** true quando o contrato de câmbio foi digitado manualmente pelo usuário (processo sem contrato vinculado) */
+	isManual?: boolean;
 }
 
 const defaultFormState: CalculatorFormState = {
@@ -569,6 +571,43 @@ export default function ProcessCalculatorPage() {
 		return `R$ ${fmt(valorBase)} × (${taxaEfetiva.toFixed(4)} / 360 / 100) × ${prazo} = R$ ${fmt(encargos)}`;
 	}
 
+	// Cria uma aba de contrato de câmbio MANUAL (processo sem contrato vinculado).
+	// O usuário digita moeda/valor/taxa/data/prazo e calcula os encargos localmente.
+	function addManualContract() {
+		const raw = (process as any)?.raw || process;
+		const refExterna = process?.priEspRefcliente || raw?.priEspRefcliente || process?.processNumber || tabs[0]?.formState.refExterna || '';
+		const nomeCliente = (process as any)?.dpeNomPessoa || raw?.dpeNomPessoa || process?.clientName || tabs[0]?.formState.nomeCliente || '';
+		const incoterm = process?.incoterm || raw?.incoterm || raw?.incEspSigla || tabs[0]?.formState.incoterm || '';
+		const rawBillingTermDays = process?.billingTermDays;
+		const defaultPrazoEmDias = rawBillingTermDays == null
+			? 0
+			: (Number.isFinite(Number(rawBillingTermDays)) ? Number(rawBillingTermDays) : 0);
+
+		const id = `contract-manual-${Date.now()}`;
+		const newTab: CalculatorTab = {
+			id,
+			type: 'contract',
+			label: 'Contrato (Manual)',
+			sourceData: null,
+			isManual: true,
+			formState: {
+				...defaultFormState,
+				refExterna,
+				nomeCliente,
+				incoterm,
+				moedaNegociada: 'USD',
+				prazoEmDias: defaultPrazoEmDias,
+			},
+			calculated: false,
+			enrichedContract: null,
+			taxaPeriod: 'anual',
+			taxaInputValue: null,
+			iof: false,
+		};
+		setTabs(prev => [newTab, ...prev]);
+		setActiveTabId(id);
+	}
+
 	async function handleSubmit() {
 		if (!process) return;
 		const calculatedTabs = tabs.filter(t => t.formState.encargosCalculados > 0);
@@ -619,6 +658,7 @@ export default function ProcessCalculatorPage() {
 
 				// Contract-specific fields
 				if (t.type === 'contract') {
+					item.origem = t.isManual ? 'manual' : 'conexos';
 					item.taxaFechamento = fs.taxaFechamento;
 					item.taxaPtaxDI = fs.taxaPtaxDI;
 					item.taxaSpotDoDia = fs.taxaSpotDoDia;
@@ -886,6 +926,134 @@ export default function ProcessCalculatorPage() {
 									</div>
 								</>
 							)}
+						</CardContent>
+					</Card>
+				</div>
+
+				{renderCalculationSection(tab)}
+			</div>
+		);
+	}
+
+	// Formulário de contrato de câmbio MANUAL — todos os campos editáveis.
+	// Vlr. Nacional (BRL) é auto-derivado de Valor × Taxa de fechamento, mas pode ser sobrescrito.
+	function renderManualContractForm(tab: CalculatorTab) {
+		const fs = tab.formState;
+
+		function recalcNacional(next: Partial<CalculatorFormState>) {
+			const valor = next.valorMoedaNegociada ?? fs.valorMoedaNegociada;
+			const taxa = next.taxaFechamento ?? fs.taxaFechamento;
+			const derived = valor > 0 && taxa && taxa > 0 ? valor * taxa : undefined;
+			updateTabFormState(tab.id, prev => ({
+				...prev,
+				...next,
+				...(derived != null ? { valorMoedaNacional: derived } : {}),
+			}));
+		}
+
+		return (
+			<div className="space-y-4">
+				<Alert className="border-blue-200 bg-blue-50">
+					<AlertDescription className="text-sm text-blue-800">
+						<Info className="inline w-4 h-4 mr-1 -mt-0.5" />
+						Contrato de câmbio <strong>manual</strong> — inserido por você porque o processo não possui contrato vinculado no Conexos. Os dados abaixo alimentam apenas o cálculo de encargos e ficam registrados como <strong>manuais</strong> para auditoria.
+					</AlertDescription>
+				</Alert>
+
+				<Card>
+					<CardHeader className="bg-gray-50 border-b py-3">
+						<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Processo</CardTitle>
+					</CardHeader>
+					<CardContent className="pt-4">
+						<div className="grid grid-cols-4 gap-x-6 gap-y-4">
+							{renderInfoField('Referência', fs.refExterna)}
+							{renderInfoField('Cliente', fs.nomeCliente)}
+							{renderInfoField('Incoterm', fs.incoterm)}
+							{renderInfoField('Prazo Conexos (dupNumDiasVcto)', formatConexosBillingTerm(process?.billingTermDays))}
+						</div>
+					</CardContent>
+				</Card>
+
+				<div className="grid grid-cols-2 gap-4">
+					{/* Contrato (editável) */}
+					<Card>
+						<CardHeader className="bg-gray-50 border-b py-3">
+							<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Contrato de Câmbio (Manual)</CardTitle>
+						</CardHeader>
+						<CardContent className="pt-4 space-y-4">
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Moeda *</Label>
+								<Input
+									value={fs.moedaNegociada}
+									onChange={(e) => updateTabFormState(tab.id, prev => ({ ...prev, moedaNegociada: e.target.value.toUpperCase() }))}
+									className="border-blue-400 mt-1" placeholder="Ex: USD"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Fechamento *</Label>
+								<Input
+									type="date"
+									value={fs.dataFechamento}
+									onChange={(e) => updateTabFormState(tab.id, prev => ({ ...prev, dataFechamento: e.target.value }))}
+									className="border-blue-400 mt-1"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Data Vencimento</Label>
+								<Input type="date" value={fs.vencimentoCliente || ''} disabled className="bg-gray-50 mt-1" />
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Prazo (em dias) *</Label>
+								<Input
+									type="number"
+									value={fs.prazoEmDias || ''}
+									onChange={(e) => updateTabFormState(tab.id, prev => ({
+										...prev, prazoEmDias: parseInt(e.target.value, 10) || 0
+									}))}
+									className="border-blue-400 mt-1"
+									placeholder="Ex: 30"
+								/>
+							</div>
+						</CardContent>
+					</Card>
+
+					{/* Valores + Taxa (editável) */}
+					<Card>
+						<CardHeader className="bg-gray-50 border-b py-3">
+							<CardTitle className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Valores e Taxa</CardTitle>
+						</CardHeader>
+						<CardContent className="pt-4 space-y-4">
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Contrato ({fs.moedaNegociada || 'moeda'})</Label>
+								<NumericFormat
+									customInput={Input}
+									thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false}
+									value={fs.valorMoedaNegociada || ''}
+									onValueChange={(values) => recalcNacional({ valorMoedaNegociada: values.floatValue || 0 })}
+									className="border-blue-400 mt-1" placeholder="Ex: 50.000,00"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Taxa de Fechamento (câmbio)</Label>
+								<NumericFormat
+									customInput={Input}
+									decimalSeparator="," decimalScale={6} allowNegative={false}
+									value={fs.taxaFechamento ?? ''}
+									onValueChange={(values) => recalcNacional({ taxaFechamento: values.floatValue ?? null })}
+									className="border-blue-400 mt-1" placeholder="Ex: 5,5000"
+								/>
+							</div>
+							<div>
+								<Label className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Vlr. Nacional (BRL) *</Label>
+								<NumericFormat
+									customInput={Input}
+									thousandSeparator="." decimalSeparator="," decimalScale={2} fixedDecimalScale allowNegative={false}
+									value={fs.valorMoedaNacional || ''}
+									onValueChange={(values) => updateTabFormState(tab.id, prev => ({ ...prev, valorMoedaNacional: values.floatValue || 0 }))}
+									className="border-blue-400 mt-1 font-semibold" placeholder="Ex: 275.000,00"
+								/>
+								<p className="text-xs text-gray-400 mt-1">Auto-calculado (Valor × Taxa); pode ajustar manualmente.</p>
+							</div>
 						</CardContent>
 					</Card>
 				</div>
@@ -1500,6 +1668,11 @@ export default function ProcessCalculatorPage() {
 												 tab.type === 'tax_di' ? 'Impostos (DI)' :
 												 'Despesa'}
 											</span>
+											{tab.isManual && (
+												<span className="ml-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-700">
+													Manual
+												</span>
+											)}
 										</td>
 										<td className="px-4 py-3 text-sm text-right text-gray-700">
 											{formatBRL(tab.formState.valorMoedaNacional)}
@@ -1578,6 +1751,8 @@ export default function ProcessCalculatorPage() {
 		);
 	}
 
+	const hasContract = tabs.some(t => t.type === 'contract');
+
 	return (
 		<ProtectedRoute>
 			<div className="p-6 max-w-6xl mx-auto">
@@ -1595,12 +1770,29 @@ export default function ProcessCalculatorPage() {
 							</p>
 						</div>
 					</div>
+					{!hasContract && (
+						<Button onClick={addManualContract} className="bg-[#337ab7] hover:bg-blue-700 text-white shrink-0">
+							<DollarSign className="w-4 h-4 mr-2" />
+							Adicionar contrato de câmbio
+						</Button>
+					)}
 				</div>
 
-				{tabs.length === 0 ? (
-					<Alert>
-						<AlertDescription>Nenhum contrato ou despesa encontrado para este processo.</AlertDescription>
+				{!hasContract && (
+					<Alert className="mb-4 border-blue-200 bg-blue-50">
+						<AlertDescription className="text-sm text-blue-800">
+							<Info className="inline w-4 h-4 mr-1 -mt-0.5" />
+							Este processo <strong>não possui contrato de câmbio</strong> vinculado no Conexos. Você pode adicionar um contrato manualmente para calcular os encargos, sem depender da baixa do financeiro.
+						</AlertDescription>
 					</Alert>
+				)}
+
+				{tabs.length === 0 ? (
+					!hasContract ? null : (
+						<Alert>
+							<AlertDescription>Nenhum contrato ou despesa encontrado para este processo.</AlertDescription>
+						</Alert>
+					)
 				) : (
 					<Tabs value={activeTabId} onValueChange={setActiveTabId}>
 						<TabsList className="w-full flex overflow-x-auto mb-4 h-auto flex-wrap gap-1 bg-gray-100 p-1 rounded-lg">
@@ -1617,6 +1809,9 @@ export default function ProcessCalculatorPage() {
 										: <FileText className="w-3.5 h-3.5 shrink-0" />
 									}
 									<span className="text-xs">{tab.label}</span>
+									{tab.isManual && (
+										<span className="px-1 py-0.5 rounded text-[9px] font-bold uppercase bg-amber-100 text-amber-700 shrink-0">Manual</span>
+									)}
 									{tab.calculated && <CheckCircle2 className="w-3 h-3 text-[#337ab7] shrink-0" />}
 								</TabsTrigger>
 							))}
@@ -1628,7 +1823,7 @@ export default function ProcessCalculatorPage() {
 						{tabs.map(tab => (
 							<TabsContent key={tab.id} value={tab.id}>
 								{tab.type === 'contract'
-									? renderContractForm(tab)
+									? (tab.isManual ? renderManualContractForm(tab) : renderContractForm(tab))
 									: tab.type === 'tax_comercializacao'
 									? renderComercializacaoForm(tab)
 									: tab.type === 'tax_di'
